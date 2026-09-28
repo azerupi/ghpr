@@ -1,0 +1,20 @@
+{
+  "id": "PR_kwDOA1",
+  "number": 1234,
+  "title": "Fix token refresh race",
+  "url": "https://github.com/acme/api/pull/1234",
+  "isDraft": false,
+  "createdAt": "2026-09-20T12:00:00Z",
+  "updatedAt": "2026-09-27T09:00:00Z",
+  "additions": 42,
+  "deletions": 8,
+  "changedFiles": 3,
+  "baseRefName": "main",
+  "headRefName": "alice/fix-refresh",
+  "reviewDecision": "CHANGES_REQUESTED",
+  "mergeable": "CONFLICTING",
+  "author": { "login": "alice" },
+  "repository": { "nameWithOwner": "acme/api" },
+  "labels": { "nodes": [{ "name": "bug" }, { "name": "auth" }] },
+  "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] }
+}

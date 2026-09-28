@@ -1,0 +1,20 @@
+---
+source: src/tui/ui.rs
+expression: "draw(&mut app, 100, 16)"
+---
+" ghpr   for-me  mine  backend                                                    [ ] views · ? help "
+" 2 of 3 PRs · 1 your turn · 2 new · filter: -draft · sort: number                                   "
+"  TURN   REPO     #    TITLE                                 AUTHOR SIZE   CI REVIEW   WAIT LAST    "
+"★ author acme/web   88 Change number 88                      bob    +42 -8 ✓  approved 8d   reviewer"
+"★ me     acme/api 1234 Fix token refresh race                alice  +42 -8 ✓  approved 2d   author  "
+"                                                                                                    "
+"                                                                                                    "
+" acme/web#88┌───────────────────────────────────────────────┐───────────────────────────────────────"
+"bob wants to│ me         you need to act                  1 │ ago · +42 -8 in 3 files               "
+"Turn: author│ author     waiting on the author            1 │2d ago · ★ new since you last looked   "
+"Review: appr│ team       requested from your team         0 │                                       "
+"CI: ✓ pass ·│ merge      approved and green               0 │                                       "
+"Score: 55 = │ reviewers  waiting on reviewers             0 │                                       "
+"https://gith│ blocked    draft, failing, or conflicting   0 │                                       "
+"            └───────────────────────────────────────────────┘                                       "
+"/-draft turn:                                                                                       "

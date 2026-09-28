@@ -1,0 +1,20 @@
+---
+source: src/tui/ui.rs
+expression: "draw(&mut app, 100, 16)"
+---
+" ghpr   for-me  mine  backend                                                    [ ] views · ? help "
+" 3 PRs · 1 your turn · 2 new · sort: number                                                         "
+"  #    SCORE TITLE                                                                          LABELS  "
+"     7   -95 draft Experiment with the new scheduler                                        bug,auth"
+"★   88    55 Change number 88                                                               bug,auth"
+"★ 1234   125 Fix token refresh race                                                         bug,auth"
+"                                                                                                    "
+" acme/api#7 Experiment with the new scheduler ──────────────────────────────────────────────────────"
+"alice wants to merge fix into main · opened 8d ago · updated 1d ago · +42 -8 in 3 files             "
+"Turn: blocked for 2d · Last: alice (author) pushed a commit 2d ago                                  "
+"Review: - · You haven't reviewed                                                                    "
+"CI: ✗ fail · Labels: bug, auth                                                                      "
+"Score: -95 = draft -80, CI failing -40, small +15, waiting 2d +10                                   "
+"https://github.com/acme/api/pull/7                                                                  "
+"                                                                                                    "
+"                                                                                      cached 3m ago "

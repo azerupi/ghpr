@@ -1,0 +1,20 @@
+---
+source: src/tui/ui.rs
+expression: "draw(&mut app, 80, 16)"
+---
+" ghpr   for-me  mine  backend                                [ ] views · ? help "
+" 3 PRs · 1 your turn · 2 new · sort: number                                     "
+"  TURN    REPO     #    TITLE                   AUTHOR CI REVIEW   WAIT LAST    "
+"  blocked acme/api    7 draft Experiment with t alice  ✗  -        2d   author  "
+"★ author  acme/web   8┌ Snooze ──────────────────────────┐approved 8d   reviewer"
+"★ me      acme/api 123│  d  1 day                        │approved 2d   author  "
+"                      │  3  3 days                       │                      "
+" acme/api#7 Experiment│  w  1 week                       │──────────────────────"
+"alice wants to merge f│  u  until there's new activity   │ed 1d ago · +42 -8 in "
+"3 files               │  any other key cancels           │                      "
+"Turn: blocked for 2d ·└──────────────────────────────────┘t 2d ago              "
+"Review: - · You haven't reviewed                                                "
+"CI: ✗ fail · Labels: bug, auth                                                  "
+"Score: -95 = draft -80, CI failing -40, small +15, waiting 2d +10               "
+"https://github.com/acme/api/pull/7                                              "
+"                                                                  cached 3m ago "

@@ -1,0 +1,9 @@
+---
+source: src/tui/ui.rs
+expression: "draw(&mut app, 60, 5)"
+---
+" ghpr   mine                             [ ] views · ? help "
+" 0 PRs · sort: number                                       "
+"                                                            "
+"                          Loading…                          "
+"                                              · refreshing… "
