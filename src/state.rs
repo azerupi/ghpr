@@ -125,11 +125,16 @@ impl LocalState {
     }
 }
 
-/// `$XDG_STATE_HOME/ghpr/state.json` (or the platform equivalent).
-pub fn default_path() -> Result<PathBuf> {
+/// `$XDG_STATE_HOME/ghpr/state.json` (or the platform equivalent); each
+/// profile gets its own under `profiles/<name>/`.
+pub fn default_path(profile: Option<&str>) -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "ghpr")
         .ok_or_else(|| eyre!("could not determine the state directory"))?;
     let dir = dirs.state_dir().unwrap_or_else(|| dirs.data_local_dir());
+    let dir = match profile {
+        Some(name) => dir.join("profiles").join(name),
+        None => dir.to_owned(),
+    };
     Ok(dir.join("state.json"))
 }
 
@@ -155,6 +160,7 @@ pub fn save(path: &Path, state: &LocalState) -> Result<()> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).wrap_err_with(|| format!("could not write {}", tmp.display()))?;
     std::fs::rename(&tmp, path).wrap_err_with(|| format!("could not write {}", path.display()))?;
+    tracing::debug!(path = %path.display(), entries = state.prs.len(), "saved state");
     Ok(())
 }
 

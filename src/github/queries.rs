@@ -1,6 +1,8 @@
 /// Search for pull requests, fetching only the fields needed for the list view.
+/// The viewer's login comes along, saving a request of its own.
 pub const SEARCH_PRS: &str = r#"
 query SearchPrs($query: String!, $first: Int!, $after: String) {
+  viewer { login }
   search(type: ISSUE, query: $query, first: $first, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
@@ -29,8 +31,6 @@ query SearchPrs($query: String!, $first: Int!, $after: String) {
   }
 }
 "#;
-
-pub const VIEWER: &str = "query Viewer { viewer { login } }";
 
 /// Review, request, and timeline details for a batch of pull requests.
 /// `$login` is the viewer, used to fetch only their own reviews.

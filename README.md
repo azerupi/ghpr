@@ -26,7 +26,8 @@ cargo install --path .
 ```
 
 `ghpr` uses your GitHub CLI login (`gh auth login`), or a token in `GH_TOKEN` /
-`GITHUB_TOKEN`. Only github.com is supported.
+`GITHUB_TOKEN`. Only github.com is supported. For separate work and personal
+accounts, see [Profiles](#profiles).
 
 ## Whose turn is it?
 
@@ -148,7 +149,8 @@ echo 'COMPLETE=fish ghpr | source' > ~/.config/fish/completions/ghpr.fish  # fis
 ## Configuration
 
 `ghpr config path` shows where the file lives (usually
-`~/.config/ghpr/config.toml`); `ghpr config check` validates it. Everything is
+`~/.config/ghpr/config.toml`); `ghpr config check` validates it and shows the
+profile in effect. Everything is
 optional:
 
 ```toml
@@ -190,6 +192,49 @@ sort = "turn,waiting"                      # optional initial sort
 
 On narrow terminals the lowest-priority columns are dropped first; the title
 always stays.
+
+## Profiles
+
+Profiles keep separate accounts apart, say work and personal: each has its own
+token, settings, cache, and seen/snoozed/muted state, so switching between them
+never overwrites the other's.
+
+```toml
+[profiles.work]
+dirs = ["~/work"]              # used when run under these directories
+email = "me@work.example"      # or in a repo whose git user.email matches
+gh_user = "me-work"            # token from `gh auth token --user me-work`
+# token_env = "WORK_TOKEN"     # or from an environment variable
+default_view = "mine"          # any setting can be overridden per profile
+[profiles.work.team_reviews]
+teams = ["acme/robotics"]
+[profiles.work.views.robots]
+query = "is:open org:acme"
+
+[profiles.personal]
+gh_user = "me"
+default = true                 # when no other profile applies
+```
+
+The first match wins: `--profile NAME` or `GHPR_PROFILE`; then
+`git config ghpr.profile` (handy with git's `includeIf`); then `dirs` (the
+longest match); then `email`; then the profile with `default = true`. Tables in
+a profile merge into the top-level ones (so a profile can add a view); other
+values replace them.
+
+Log in to each account with `gh auth login` once; gh keeps them side by side.
+`ghpr paths` shows which profile applies where you are, and why.
+
+## Logs
+
+Each run logs to `$XDG_STATE_HOME/ghpr/logs/` (usually
+`~/.local/state/ghpr/logs/`), one file per day, a week kept: startup and profile,
+every request with its duration, status, retries, and remaining rate limit,
+fetch summaries, cache and state writes, UI actions, errors, and panics. Tokens
+are never logged. `GHPR_LOG=debug` (or `trace`, or any `tracing` filter like
+`ghpr::github=debug`) logs more.
+
+`ghpr paths` prints where the config, cache, state, and logs are.
 
 ## Development
 

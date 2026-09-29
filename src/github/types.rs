@@ -18,6 +18,7 @@ pub struct GraphQlError {
 
 #[derive(Debug, Deserialize)]
 pub struct SearchData {
+    pub viewer: RawActor,
     pub search: SearchConnection,
 }
 
@@ -104,11 +105,6 @@ pub struct RawCommit {
 #[derive(Debug, Deserialize)]
 pub struct RawStatusRollup {
     pub state: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ViewerData {
-    pub viewer: RawActor,
 }
 
 #[derive(Debug, Deserialize)]

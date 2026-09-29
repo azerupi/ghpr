@@ -13,6 +13,7 @@ use crate::columns::Column;
 use crate::filter::complete::{self, Completion};
 use crate::filter::{self, Filter, toggle_term};
 use crate::model::{Pr, ScoreWeights, Turn};
+use crate::progress::Progress;
 use crate::sort::SortSpec;
 use crate::state::{Flags, LocalState, Snooze};
 
@@ -47,6 +48,8 @@ pub struct Settings {
     pub weights: ScoreWeights,
     pub state: LocalState,
     pub columns: Vec<Column>,
+    /// The profile in effect, shown in the header.
+    pub profile: Option<String>,
 }
 
 pub struct TabSettings {
@@ -76,7 +79,10 @@ pub struct Tab {
     pub error: Option<String>,
     /// PR ids marked with `v`; actions apply to all of them.
     pub marked: BTreeSet<String>,
-    last_attempt: Option<Timestamp>,
+    /// What the running refresh last reported, and when.
+    pub progress: Option<(Progress, Timestamp)>,
+    /// When the last refresh started (the running one, while refreshing).
+    pub last_attempt: Option<Timestamp>,
 }
 
 impl Tab {
@@ -95,6 +101,7 @@ impl Tab {
             truncated: false,
             error: None,
             marked: BTreeSet::new(),
+            progress: None,
             last_attempt: None,
         }
     }
@@ -129,6 +136,7 @@ pub struct App {
     pub state: LocalState,
     /// Table columns, in order; the number keys sort by them.
     pub columns: Vec<Column>,
+    pub profile: Option<String>,
     pub prompt: Option<Prompt>,
     /// The snooze choices are showing.
     pub snoozing: bool,
@@ -173,6 +181,11 @@ pub enum Msg {
         tab: usize,
         result: Result<FetchedData, String>,
     },
+    /// A running refresh moved along.
+    Progress {
+        tab: usize,
+        progress: Progress,
+    },
     /// The outcome of a [`Cmd`], shown briefly in the status bar.
     Flash(String),
 }
@@ -204,6 +217,7 @@ impl App {
             weights: settings.weights,
             state: settings.state,
             columns: settings.columns,
+            profile: settings.profile,
             prompt: None,
             snoozing: false,
             facets: None,
@@ -310,11 +324,20 @@ impl App {
                     Vec::new()
                 }
             }
+            Msg::Progress { tab, progress } => {
+                if let Some(t) = self.tabs.get_mut(tab)
+                    && t.refreshing
+                {
+                    t.progress = Some((progress, self.now));
+                }
+                Vec::new()
+            }
             Msg::Fetched { tab, result } => {
                 let Some(t) = self.tabs.get_mut(tab) else {
                     return Vec::new();
                 };
                 t.refreshing = false;
+                t.progress = None;
                 match result {
                     Ok(data) => {
                         self.state.touch(&data.prs, data.at);
@@ -900,6 +923,7 @@ impl App {
         }
         tab.refreshing = true;
         tab.last_attempt = Some(now);
+        tab.progress = None;
         vec![Cmd::Fetch(index)]
     }
 
@@ -987,6 +1011,7 @@ pub mod tests {
             weights: ScoreWeights::default(),
             state: LocalState::new("2026-09-01T00:00:00Z".parse().unwrap()),
             columns: crate::columns::DEFAULT.to_vec(),
+            profile: None,
         }
     }
 

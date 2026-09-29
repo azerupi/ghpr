@@ -10,8 +10,11 @@ mod filter;
 mod git;
 mod github;
 mod glob;
+mod logging;
 mod model;
 mod output;
+mod profile;
+mod progress;
 mod sort;
 mod state;
 #[cfg(test)]
@@ -21,7 +24,7 @@ mod views;
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use clap::{CommandFactory, Parser};
 use color_eyre::eyre::{Result, WrapErr, bail, eyre};
@@ -30,8 +33,23 @@ use cli::{Cli, Command, ConfigCommand, CountArgs, GlobalArgs, ListArgs};
 use config::Config;
 use filter::Filter;
 use model::{Pr, Viewer};
+use progress::{Progress, Reporter};
 use sort::SortSpec;
 use views::View;
+
+/// Like `println!`, but a closed pipe (`ghpr paths | head -1`) isn't an error.
+macro_rules! out {
+    ($($arg:tt)*) => {
+        write_out(&format!("{}\n", format_args!($($arg)*)))?
+    };
+}
+
+fn write_out(text: &str) -> Result<()> {
+    match std::io::stdout().lock().write_all(text.as_bytes()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other.wrap_err("failed to write output"),
+    }
+}
 
 /// PRs fetched per search in the interactive UI.
 const UI_LIMIT: u32 = 100;
@@ -45,13 +63,40 @@ async fn main() -> Result<()> {
         .display_env_section(false)
         .install()?;
     let cli = Cli::parse();
+    let _log = logging::init();
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        args = ?std::env::args().skip(1).collect::<Vec<_>>(),
+        cwd = %std::env::current_dir().unwrap_or_default().display(),
+        "start"
+    );
 
-    match cli.command {
+    let result = match cli.command {
         Some(Command::List(args)) => list(&cli.global, args).await,
         Some(Command::Count(args)) => count(&cli.global, args).await,
         Some(Command::Config(command)) => config_command(&cli.global, command),
+        Some(Command::Paths) => paths(&cli.global),
         None => interactive(&cli.global, cli.view.as_deref()).await,
+    };
+    match &result {
+        Ok(()) => tracing::info!("exit"),
+        Err(e) => tracing::error!(error = format!("{e:#}"), "exit with error"),
     }
+    result
+}
+
+fn load_config(global: &GlobalArgs) -> Result<Config> {
+    let here = profile::Whereabouts::current(global.profile.clone());
+    let config = config::load(global.config.as_deref(), &here)?;
+    match &config.profile {
+        Some(p) => tracing::info!(profile = %p.name, reason = %p.reason, "profile"),
+        None => tracing::info!("no profile"),
+    }
+    Ok(config)
+}
+
+fn profile_name(config: &Config) -> Option<&str> {
+    config.profile.as_ref().map(|p| p.name.as_str())
 }
 
 struct Setup {
@@ -65,7 +110,7 @@ struct Setup {
 }
 
 fn setup(global: &GlobalArgs, view: Option<&str>) -> Result<Setup> {
-    let config = config::load(global.config.as_deref())?;
+    let config = load_config(global)?;
     let view = views::resolve(view, &global.repos, &config, git::current_repo)?;
     let viewer = Viewer {
         login: String::new(),
@@ -74,7 +119,7 @@ fn setup(global: &GlobalArgs, view: Option<&str>) -> Result<Setup> {
         team_mode: config.team_reviews.default_mode(),
         team_repos: config.team_reviews.repo_modes(),
     };
-    let cache_path = cache_path(&view);
+    let cache_path = cache_path(&view, profile_name(&config));
     // Parsed up front, so a typo fails before any slow network requests.
     let filter_text = global.filter.clone().unwrap_or_else(|| view.filter.clone());
     let filter = Filter::parse(&filter_text).map_err(|e| eyre!("invalid filter: {e}"))?;
@@ -91,12 +136,17 @@ fn setup(global: &GlobalArgs, view: Option<&str>) -> Result<Setup> {
     })
 }
 
-fn cache_path(view: &View) -> Option<PathBuf> {
-    cache::default_dir().ok().map(|dir| cache::path(&dir, view))
+fn cache_path(view: &View, profile: Option<&str>) -> Option<PathBuf> {
+    cache::default_dir(profile)
+        .ok()
+        .map(|dir| cache::path(&dir, view))
 }
 
-fn load_state(now: jiff::Timestamp) -> Result<(state::LocalState, Option<PathBuf>)> {
-    match state::default_path() {
+fn load_state(
+    now: jiff::Timestamp,
+    profile: Option<&str>,
+) -> Result<(state::LocalState, Option<PathBuf>)> {
+    match state::default_path(profile) {
         Ok(path) => Ok((state::load(&path, now)?, Some(path))),
         Err(_) => Ok((state::LocalState::new(now), None)),
     }
@@ -105,7 +155,8 @@ fn load_state(now: jiff::Timestamp) -> Result<(state::LocalState, Option<PathBuf
 async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
     let setup = setup(global, view)?;
     let now = jiff::Timestamp::now();
-    let (local, state_path) = load_state(now)?;
+    let profile = profile_name(&setup.config).map(str::to_owned);
+    let (local, state_path) = load_state(now, profile.as_deref())?;
 
     // One tab per view. Views that can't be resolved here (like `repo` outside a
     // checkout) are left out; the one asked for already resolved above.
@@ -135,7 +186,7 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
             sort,
         };
         let source = tui::TabSource {
-            cache_path: cache_path(&view),
+            cache_path: cache_path(&view, profile.as_deref()),
             view,
         };
         tabs.push((settings, source));
@@ -150,6 +201,7 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
         weights: setup.config.score,
         state: local,
         columns: setup.config.columns.clone(),
+        profile: profile.clone(),
     };
     let mut app = tui::App::new(settings, now);
     if !global.no_cache {
@@ -166,7 +218,9 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
     let client = if global.offline {
         None
     } else {
-        Some(Arc::new(github::Client::new(auth::token()?)?))
+        Some(Arc::new(github::Client::new(auth::token(
+            setup.config.profile.as_ref(),
+        )?)?))
     };
     let source = tui::Source {
         client,
@@ -194,8 +248,8 @@ async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {
         );
         (cached.prs, cached.viewer, Vec::new())
     } else {
-        let client = github::Client::new(auth::token()?)?;
-        let fetched = fetch::fetch(&client, &setup.view, setup.viewer, args.limit).await?;
+        let client = github::Client::new(auth::token(setup.config.profile.as_ref())?)?;
+        let fetched = fetch_with_progress(&client, &setup.view, setup.viewer, args.limit).await?;
         if let Some(path) = &setup.cache_path
             && let Err(e) = cache::save(path, &fetched.prs, &fetched.viewer, jiff::Timestamp::now())
         {
@@ -206,7 +260,7 @@ async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {
 
     let now = jiff::Timestamp::now();
     // Read-only here: listing doesn't mark anything as seen.
-    let (local, _) = load_state(now)?;
+    let (local, _) = load_state(now, profile_name(&setup.config))?;
     let ctx = filter::Context {
         viewer: &viewer,
         now,
@@ -228,12 +282,7 @@ async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {
         output::table(&prs, &setup.config.columns, &setup.config.score, now, width)
     };
 
-    let mut stdout = std::io::stdout().lock();
-    match stdout.write_all(text.as_bytes()) {
-        // `ghpr list | head` closes the pipe early; that's not an error.
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
-        other => other.wrap_err("failed to write output")?,
-    }
+    write_out(&text)?;
 
     for t in &truncated {
         eprintln!(
@@ -242,6 +291,59 @@ async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Fetch a view, showing progress on stderr when it's a terminal (and nothing
+/// when output goes to a script).
+async fn fetch_with_progress(
+    client: &github::Client,
+    view: &View,
+    viewer: Viewer,
+    limit: u32,
+) -> Result<fetch::Fetched> {
+    if !std::io::stderr().is_terminal() {
+        return fetch::fetch(client, view, viewer, limit, &Reporter::none()).await;
+    }
+
+    // The latest step and when it happened; redrawn on every step and every
+    // second, so a slow request still shows time passing.
+    let started = std::time::Instant::now();
+    let latest: Arc<Mutex<(String, std::time::Instant)>> =
+        Arc::new(Mutex::new(("connecting".to_owned(), started)));
+    let draw = {
+        let latest = Arc::clone(&latest);
+        move || {
+            let (step, at) = latest.lock().unwrap().clone();
+            let mut line = format!(
+                "{step}… {}",
+                progress::elapsed(started.elapsed().as_secs() as i64)
+            );
+            let quiet = at.elapsed().as_secs() as i64;
+            if quiet >= progress::STALL_SECS {
+                line.push_str(&format!(" (no response for {})", progress::elapsed(quiet)));
+            }
+            eprint!("\r\x1b[K{line}");
+        }
+    };
+    let reporter = {
+        let (latest, draw) = (Arc::clone(&latest), draw.clone());
+        Reporter::new(move |p: Progress| {
+            *latest.lock().unwrap() = (p.describe(), std::time::Instant::now());
+            draw();
+        })
+    };
+
+    let fetching = fetch::fetch(client, view, viewer, limit, &reporter);
+    tokio::pin!(fetching);
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
+    let result = loop {
+        tokio::select! {
+            result = &mut fetching => break result,
+            _ = ticker.tick() => draw(),
+        }
+    };
+    eprint!("\r\x1b[K");
+    result
 }
 
 async fn count(global: &GlobalArgs, args: CountArgs) -> Result<()> {
@@ -266,8 +368,8 @@ async fn count(global: &GlobalArgs, args: CountArgs) -> Result<()> {
             )
         }
         _ => {
-            let client = github::Client::new(auth::token()?)?;
-            let fetched = fetch::fetch(&client, &setup.view, setup.viewer, UI_LIMIT).await?;
+            let client = github::Client::new(auth::token(setup.config.profile.as_ref())?)?;
+            let fetched = fetch_with_progress(&client, &setup.view, setup.viewer, UI_LIMIT).await?;
             if let Some(path) = &setup.cache_path {
                 let _ = cache::save(path, &fetched.prs, &fetched.viewer, now);
             }
@@ -275,15 +377,46 @@ async fn count(global: &GlobalArgs, args: CountArgs) -> Result<()> {
         }
     };
 
-    let (local, _) = load_state(now)?;
+    let (local, _) = load_state(now, profile_name(&setup.config))?;
     let ctx = filter::Context {
         viewer: &viewer,
         now,
         local: Some(&local),
     };
-    println!(
+    out!(
         "{}",
         prs.iter().filter(|pr| setup.filter.shows(pr, &ctx)).count()
+    );
+    Ok(())
+}
+
+/// Where everything lives for the profile in effect here.
+fn paths(global: &GlobalArgs) -> Result<()> {
+    let config = load_config(global)?;
+    let profile = profile_name(&config);
+    let config_path = match &global.config {
+        Some(path) => path.clone(),
+        None => config::default_path()?,
+    };
+    let show =
+        |p: Result<PathBuf>| p.map_or_else(|e| format!("({e})"), |p| p.display().to_string());
+    match &config.profile {
+        Some(p) => {
+            let account = match (&p.gh_user, &p.token_env) {
+                (_, Some(var)) => format!("token from ${var}"),
+                (Some(user), None) => format!("gh account {user}"),
+                (None, None) => "GH_TOKEN, GITHUB_TOKEN, or gh's active account".to_owned(),
+            };
+            out!("profile  {} ({}; {account})", p.name, p.reason);
+        }
+        None => out!("profile  none (GH_TOKEN, GITHUB_TOKEN, or gh's active account)"),
+    }
+    out!("config   {}", config_path.display());
+    out!("cache    {}", show(cache::default_dir(profile)));
+    out!("state    {}", show(state::default_path(profile)));
+    out!(
+        "logs     {}",
+        logging::dir().map_or_else(|| "(unavailable)".to_owned(), |d| d.display().to_string())
     );
     Ok(())
 }
@@ -295,11 +428,14 @@ fn config_command(global: &GlobalArgs, command: ConfigCommand) -> Result<()> {
                 Some(path) => path.clone(),
                 None => config::default_path()?,
             };
-            println!("{}", path.display());
+            out!("{}", path.display());
         }
         ConfigCommand::Check => {
-            let config = config::load(global.config.as_deref())?;
-            println!("config OK ({} custom views)", config.views.len());
+            let config = load_config(global)?;
+            out!("config OK ({} custom views)", config.views.len());
+            if let Some(p) = &config.profile {
+                out!("profile: {} ({})", p.name, p.reason);
+            }
         }
     }
     Ok(())

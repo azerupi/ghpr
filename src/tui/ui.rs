@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, PromptKind, SNOOZES};
+use super::app::{App, PromptKind, SNOOZES, Tab};
 use crate::columns::{self, Column};
 use crate::filter::Mark;
 use crate::model::{
@@ -14,6 +14,7 @@ use crate::model::{
 };
 use crate::model::{ScoreWeights, breakdown};
 use crate::output::age;
+use crate::progress::{STALL_SECS, elapsed};
 use crate::state::{Flags, Snooze};
 
 /// Waiting longer than this is highlighted in yellow, then red.
@@ -63,9 +64,17 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let [tabs_line, info_line] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
 
-    let mut tabs = vec![" ghpr ".bold().reversed(), Span::raw(" ")];
+    let mut tabs = vec![" ghpr ".bold().reversed()];
+    if let Some(profile) = &app.profile {
+        tabs.push(format!(" {profile} ").black().on_cyan());
+    }
+    tabs.push(Span::raw(" "));
     for (i, tab) in app.tabs.iter().enumerate() {
-        let name = format!(" {} ", tab.view_name);
+        let name = if tab.refreshing {
+            format!(" {} {} ", spinner(app.now), tab.view_name)
+        } else {
+            format!(" {} ", tab.view_name)
+        };
         tabs.push(if i == app.active {
             name.bold().reversed()
         } else {
@@ -126,13 +135,17 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if tab.prs.is_empty() {
         let text = if tab.refreshing {
-            "Loading…"
+            let step = tab
+                .progress
+                .as_ref()
+                .map_or_else(|| "connecting".to_owned(), |(p, _)| p.describe());
+            format!("{} Loading: {step}…", spinner(app.now))
         } else if tab.error.is_some() {
-            "Couldn't load pull requests."
+            "Couldn't load pull requests.".to_owned()
         } else if tab.total() > 0 {
-            "No pull requests match the filter (Esc clears it)."
+            "No pull requests match the filter (Esc clears it).".to_owned()
         } else {
-            "No pull requests in this view."
+            "No pull requests in this view.".to_owned()
         };
         let paragraph = Paragraph::new(text.dark_gray()).centered();
         let [middle] = Layout::vertical([Constraint::Length(1)])
@@ -564,10 +577,36 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         right.push(format!("{label} {} ago", age(app.now, at)).dark_gray());
     }
     if tab.refreshing {
-        right.push(" · refreshing…".cyan());
+        right.extend(refresh_status(tab, app.now));
     }
     right.push(Span::raw(" "));
     frame.render_widget(Line::from(right).right_aligned(), area);
+}
+
+/// `⠹ refreshing: details 50/120 · 14s`, plus a warning when nothing has
+/// happened for a while.
+fn refresh_status(tab: &Tab, now: Timestamp) -> Vec<Span<'static>> {
+    let started = tab.last_attempt.unwrap_or(now);
+    let step = tab
+        .progress
+        .as_ref()
+        .map_or_else(|| "connecting".to_owned(), |(p, _)| p.describe());
+    let mut spans = vec![
+        Span::raw(" · "),
+        format!("{} refreshing: {step}", spinner(now)).cyan(),
+        format!(" · {}", elapsed(now.duration_since(started).as_secs())).dark_gray(),
+    ];
+    let last_news = tab.progress.as_ref().map_or(started, |(_, at)| *at);
+    let quiet = now.duration_since(last_news).as_secs();
+    if quiet >= STALL_SECS {
+        spans.push(format!(" · no response for {}", elapsed(quiet)).yellow());
+    }
+    spans
+}
+
+fn spinner(now: Timestamp) -> char {
+    const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    FRAMES[(now.as_millisecond() / 250).rem_euclid(FRAMES.len() as i64) as usize]
 }
 
 /// Key, description. An empty key starts a new section titled by the description.
@@ -905,6 +944,43 @@ mod tests {
             .map(|c| c.parse().unwrap())
             .collect();
         insta::assert_snapshot!(draw(&mut app, 100, 16));
+    }
+
+    #[test]
+    fn renders_refresh_progress_and_stalls() {
+        use super::super::app::Msg;
+        use crate::progress::Progress;
+        let mut app = sample();
+        app.init();
+        app.update(Msg::Progress {
+            tab: 0,
+            progress: Progress::Details {
+                done: 50,
+                total: 120,
+            },
+        });
+        app.update(Msg::Tick(now() + jiff::SignedDuration::from_secs(9)));
+        let status = draw(&mut app, 120, 16).lines().last().unwrap().to_owned();
+        assert!(
+            status.contains("refreshing: details 50/120 · 9s"),
+            "{status}"
+        );
+        assert!(!status.contains("no response"), "{status}");
+
+        app.update(Msg::Tick(now() + jiff::SignedDuration::from_secs(80)));
+        let status = draw(&mut app, 120, 16).lines().last().unwrap().to_owned();
+        assert!(status.contains("· 1m 20s"), "{status}");
+        assert!(status.contains("no response for 1m 20s"), "{status}");
+        let tabs = draw(&mut app, 120, 16).lines().next().unwrap().to_owned();
+        assert!(tabs.contains(" for-me "), "{tabs}");
+    }
+
+    #[test]
+    fn shows_the_profile() {
+        let mut app = sample();
+        app.profile = Some("work".into());
+        let tabs = draw(&mut app, 100, 16).lines().next().unwrap().to_owned();
+        assert!(tabs.starts_with("\" ghpr  work   for-me "), "{tabs}");
     }
 
     #[test]

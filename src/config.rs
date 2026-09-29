@@ -8,6 +8,7 @@ use serde::Deserialize;
 use crate::columns::{self, Column};
 use crate::glob::Glob;
 use crate::model::{ScoreWeights, TeamMode};
+use crate::profile::{self, Profile, Whereabouts};
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -25,6 +26,9 @@ pub struct Config {
     pub score: ScoreWeights,
     /// Table columns, in order. The title column is never dropped on narrow terminals.
     pub columns: Vec<Column>,
+    /// The profile in effect, if the config defines any.
+    #[serde(skip)]
+    pub profile: Option<Profile>,
 }
 
 impl Default for Config {
@@ -37,6 +41,7 @@ impl Default for Config {
             team_reviews: TeamReviews::default(),
             score: ScoreWeights::default(),
             columns: columns::DEFAULT.to_vec(),
+            profile: None,
         }
     }
 }
@@ -127,14 +132,20 @@ pub fn default_path() -> Result<PathBuf> {
         .ok_or_else(|| eyre!("could not determine the config directory"))
 }
 
-/// Load the config. An explicitly given file must exist; a missing default file
-/// just means "use the defaults".
-pub fn load(explicit: Option<&Path>) -> Result<Config> {
+/// Load the config, with the profile for `here` applied. An explicitly given
+/// file must exist; a missing default file just means "use the defaults".
+pub fn load(explicit: Option<&Path>, here: &Whereabouts) -> Result<Config> {
     let path = match explicit {
         Some(path) => path.to_owned(),
         None => {
             let path = default_path()?;
             if !path.exists() {
+                if let Some(name) = &here.explicit {
+                    bail!(
+                        "no profile {name:?}: there's no config file ({})",
+                        path.display()
+                    );
+                }
                 return Ok(Config::default());
             }
             path
@@ -142,11 +153,22 @@ pub fn load(explicit: Option<&Path>) -> Result<Config> {
     };
     let text = std::fs::read_to_string(&path)
         .wrap_err_with(|| format!("could not read config file {}", path.display()))?;
-    parse(&text).wrap_err_with(|| format!("invalid config file {}", path.display()))
+    let config = parse_with(&text, here)
+        .wrap_err_with(|| format!("invalid config file {}", path.display()))?;
+    tracing::debug!(path = %path.display(), profile = ?config.profile, "loaded config");
+    Ok(config)
 }
 
+#[cfg(test)]
 fn parse(text: &str) -> Result<Config> {
-    let config: Config = toml::from_str(text)?;
+    parse_with(text, &Whereabouts::default())
+}
+
+fn parse_with(text: &str, here: &Whereabouts) -> Result<Config> {
+    let mut table: toml::Table = toml::from_str(text)?;
+    let profile = profile::apply(&mut table, here)?;
+    let mut config: Config = toml::Value::Table(table).try_into()?;
+    config.profile = profile;
     for (name, view) in &config.views {
         crate::filter::Filter::parse(&view.filter)
             .map_err(|e| eyre!("views.{name}.filter: {e}"))?;

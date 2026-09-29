@@ -22,10 +22,16 @@ pub struct Cached {
     pub prs: Vec<Pr>,
 }
 
-pub fn default_dir() -> Result<PathBuf> {
-    directories::ProjectDirs::from("", "", "ghpr")
+/// Profiles each get their own subdirectory, so switching between them never
+/// overwrites the other's cache.
+pub fn default_dir(profile: Option<&str>) -> Result<PathBuf> {
+    let dir = directories::ProjectDirs::from("", "", "ghpr")
         .map(|dirs| dirs.cache_dir().to_owned())
-        .ok_or_else(|| eyre!("could not determine the cache directory"))
+        .ok_or_else(|| eyre!("could not determine the cache directory"))?;
+    Ok(match profile {
+        Some(name) => dir.join("profiles").join(name),
+        None => dir,
+    })
 }
 
 /// The cache file for a view. Keyed by its searches too, so `-R` restrictions
@@ -52,8 +58,19 @@ pub fn path(dir: &Path, view: &View) -> PathBuf {
 /// Missing, unreadable, or outdated caches are all just "no cache".
 pub fn load(path: &Path) -> Option<Cached> {
     let text = std::fs::read_to_string(path).ok()?;
-    let cached: Cached = serde_json::from_str(&text).ok()?;
-    (cached.version == VERSION).then_some(cached)
+    let cached = match serde_json::from_str::<Cached>(&text) {
+        Ok(cached) if cached.version == VERSION => cached,
+        Ok(cached) => {
+            tracing::debug!(path = %path.display(), version = cached.version, "ignoring old cache");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "ignoring unreadable cache");
+            return None;
+        }
+    };
+    tracing::debug!(path = %path.display(), prs = cached.prs.len(), fetched_at = %cached.fetched_at, "loaded cache");
+    Some(cached)
 }
 
 pub fn save(path: &Path, prs: &[Pr], viewer: &str, fetched_at: Timestamp) -> Result<()> {
@@ -77,6 +94,7 @@ pub fn save(path: &Path, prs: &[Pr], viewer: &str, fetched_at: Timestamp) -> Res
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).wrap_err_with(|| format!("could not write {}", tmp.display()))?;
     std::fs::rename(&tmp, path).wrap_err_with(|| format!("could not write {}", path.display()))?;
+    tracing::debug!(path = %path.display(), prs = prs.len(), "saved cache");
     Ok(())
 }
 

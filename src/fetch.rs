@@ -1,6 +1,7 @@
 //! Fetching everything a view needs: searches, then details, then the turn.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use color_eyre::eyre::Result;
 use futures::future::try_join_all;
@@ -8,6 +9,7 @@ use futures::future::try_join_all;
 use crate::github::Client;
 use crate::github::types::{RawPr, RawPrDetail};
 use crate::model::{Pr, TeamMode, Turn, Viewer, build_pr};
+use crate::progress::{Progress, Reporter};
 use crate::views::{Keep, View};
 
 pub struct Fetched {
@@ -30,14 +32,30 @@ pub async fn fetch(
     view: &View,
     mut viewer: Viewer,
     limit: u32,
+    reporter: &Reporter,
 ) -> Result<Fetched> {
-    let searches = try_join_all(
-        view.searches
-            .iter()
-            .map(|s| client.search_prs(&s.query, limit)),
-    );
-    let (login, results) = futures::try_join!(client.viewer_login(), searches)?;
-    viewer.login = login;
+    let started = std::time::Instant::now();
+    let total = view.searches.len();
+    tracing::info!(view = %view.name, searches = total, "fetching");
+    let (done, found) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    reporter.report(Progress::Searching {
+        done: 0,
+        total,
+        found: 0,
+    });
+    let searches = try_join_all(view.searches.iter().map(|s| async {
+        let result = client.search_prs(&s.query, limit, reporter).await?;
+        let found = found.fetch_add(result.prs.len(), Ordering::Relaxed) + result.prs.len();
+        let done = done.fetch_add(1, Ordering::Relaxed) + 1;
+        reporter.report(Progress::Searching { done, total, found });
+        Ok::<_, color_eyre::Report>(result)
+    }));
+    let results = searches.await?;
+    // Every search reports who's asking; views always have at least one.
+    viewer.login = results
+        .first()
+        .map(|r| r.viewer.clone())
+        .unwrap_or_default();
 
     let mut truncated = Vec::new();
     let mut hits = Vec::new();
@@ -55,7 +73,7 @@ pub async fn fetch(
 
     let ids: Vec<String> = hits.iter().map(|(pr, _)| pr.id.clone()).collect();
     let mut details: HashMap<String, RawPrDetail> = client
-        .pr_details(&ids, &viewer.login)
+        .pr_details(&ids, &viewer.login, reporter)
         .await?
         .into_iter()
         .map(|d| (d.id.clone(), d))
@@ -74,6 +92,13 @@ pub async fn fetch(
             prs.push(pr);
         }
     }
+    tracing::info!(
+        view = %view.name,
+        prs = prs.len(),
+        truncated = truncated.len(),
+        ms = started.elapsed().as_millis() as u64,
+        "fetched"
+    );
     Ok(Fetched {
         prs,
         viewer: viewer.login,

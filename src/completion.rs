@@ -8,6 +8,7 @@ use std::ffi::OsStr;
 use clap_complete::engine::CompletionCandidate;
 
 use crate::filter::complete;
+use crate::profile::Whereabouts;
 use crate::{cache, config, git, state, views};
 
 /// Complete the word at the end of a `-q` value, using the default view's
@@ -15,17 +16,13 @@ use crate::{cache, config, git, state, views};
 pub fn filter(current: &OsStr) -> Vec<CompletionCandidate> {
     let text = current.to_string_lossy();
     let now = jiff::Timestamp::now();
-    let config = config::load(
-        std::env::var_os("GHPR_CONFIG")
-            .as_deref()
-            .map(AsRef::as_ref),
-    )
-    .unwrap_or_default();
+    let config = load_config();
+    let profile = config.profile.as_ref().map(|p| p.name.as_str());
     let cached = views::resolve(None, &[], &config, git::current_repo)
         .ok()
-        .and_then(|view| cache::load(&cache::path(&cache::default_dir().ok()?, &view)));
+        .and_then(|view| cache::load(&cache::path(&cache::default_dir(profile).ok()?, &view)));
     let (prs, viewer) = cached.map_or((Vec::new(), String::new()), |c| (c.prs, c.viewer));
-    let local = state::default_path()
+    let local = state::default_path(profile)
         .ok()
         .and_then(|p| state::load(&p, now).ok());
 
@@ -48,16 +45,18 @@ pub fn sort(current: &OsStr) -> Vec<CompletionCandidate> {
 }
 
 pub fn views() -> Vec<CompletionCandidate> {
-    let config = config::load(
-        std::env::var_os("GHPR_CONFIG")
-            .as_deref()
-            .map(AsRef::as_ref),
-    )
-    .unwrap_or_default();
-    views::names(&config)
+    views::names(&load_config())
         .into_iter()
         .map(CompletionCandidate::new)
         .collect()
+}
+
+/// The config for the profile in effect here. Completion can't see a
+/// `--profile` on the command line being completed, only `GHPR_PROFILE`.
+fn load_config() -> config::Config {
+    let here = Whereabouts::current(std::env::var("GHPR_PROFILE").ok());
+    let path = std::env::var_os("GHPR_CONFIG");
+    config::load(path.as_deref().map(AsRef::as_ref), &here).unwrap_or_default()
 }
 
 /// Shells replace the whole argument, so each candidate is the full text with

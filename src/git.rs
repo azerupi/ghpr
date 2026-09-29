@@ -14,6 +14,17 @@ pub fn current_repo() -> Option<RepoName> {
     parse_remote_url(String::from_utf8_lossy(&output.stdout).trim())
 }
 
+/// A git config value as seen from the current directory (so `includeIf`
+/// sections apply), if it's set.
+pub fn config_value(key: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["config", "--get", key])
+        .output()
+        .ok()?;
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (output.status.success() && !value.is_empty()).then_some(value)
+}
+
 /// Extract `owner/repo` from a github.com remote URL (HTTPS, SSH, or scp-style).
 fn parse_remote_url(url: &str) -> Option<RepoName> {
     let path = url

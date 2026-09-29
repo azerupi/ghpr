@@ -19,6 +19,7 @@ use app::{Cmd, FetchedData, Msg};
 
 use crate::github::Client;
 use crate::model::Viewer;
+use crate::progress::Reporter;
 use crate::views::View;
 use crate::{cache, clipboard, fetch, state};
 
@@ -42,7 +43,8 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
     let source = Arc::new(source);
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut events = EventStream::new();
-    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    // Fast enough to animate the refresh spinner; cheap otherwise.
+    let mut ticker = tokio::time::interval(Duration::from_millis(250));
 
     let mut terminal = ratatui::init();
     let result = async {
@@ -60,6 +62,21 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
                 _ = ticker.tick() => Msg::Tick(jiff::Timestamp::now()),
                 Some(msg) = rx.recv() => msg,
             };
+            match &msg {
+                Msg::Key(key) => tracing::trace!(?key, "key"),
+                Msg::Fetched {
+                    tab,
+                    result: Err(error),
+                } => tracing::warn!(tab, %error, "refresh failed"),
+                Msg::Fetched {
+                    tab,
+                    result: Ok(data),
+                } => {
+                    tracing::debug!(tab, prs = data.prs.len(), "refreshed");
+                }
+                Msg::Progress { tab, progress } => tracing::trace!(tab, ?progress, "progress"),
+                Msg::Tick(_) | Msg::Flash(_) => {}
+            }
             let cmds = app.update(msg);
             run_cmds(cmds, &source, &tx);
         }
@@ -72,6 +89,12 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
 
 fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg>) {
     for cmd in cmds {
+        match &cmd {
+            Cmd::Fetch(tab) => tracing::debug!(tab, "refresh"),
+            Cmd::Open(url) => tracing::info!(%url, "open"),
+            Cmd::Copy(text) => tracing::info!(lines = text.lines().count(), "copy"),
+            Cmd::SaveState(_) => tracing::trace!("save state"),
+        }
         match cmd {
             Cmd::Fetch(tab) => {
                 let Some(client) = source.client.clone() else {
@@ -80,7 +103,11 @@ fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg
                 let source = Arc::clone(source);
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let result = fetch_view(&client, &source, tab).await;
+                    let progress_tx = tx.clone();
+                    let reporter = Reporter::new(move |progress| {
+                        let _ = progress_tx.send(Msg::Progress { tab, progress });
+                    });
+                    let result = fetch_view(&client, &source, tab, &reporter).await;
                     let _ = tx.send(Msg::Fetched { tab, result });
                 });
             }
@@ -109,11 +136,22 @@ fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg
     }
 }
 
-async fn fetch_view(client: &Client, source: &Source, tab: usize) -> Result<FetchedData, String> {
+async fn fetch_view(
+    client: &Client,
+    source: &Source,
+    tab: usize,
+    reporter: &Reporter,
+) -> Result<FetchedData, String> {
     let tab = &source.tabs[tab];
-    let fetched = fetch::fetch(client, &tab.view, source.viewer.clone(), source.limit)
-        .await
-        .map_err(|e| format!("refresh failed: {e:#}"))?;
+    let fetched = fetch::fetch(
+        client,
+        &tab.view,
+        source.viewer.clone(),
+        source.limit,
+        reporter,
+    )
+    .await
+    .map_err(|e| format!("refresh failed: {e:#}"))?;
     let at = jiff::Timestamp::now();
     if let Some(path) = &tab.cache_path {
         // A cache write failure only costs a slower next start; not worth an error.

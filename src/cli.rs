@@ -32,6 +32,10 @@ pub struct GlobalArgs {
     #[arg(long, global = true, env = "GHPR_CONFIG", value_name = "PATH")]
     pub config: Option<PathBuf>,
 
+    /// Use this profile instead of picking one by directory (see the README).
+    #[arg(long, global = true, env = "GHPR_PROFILE", value_name = "NAME")]
+    pub profile: Option<String>,
+
     /// Only show cached results; don't contact GitHub.
     #[arg(long, global = true, conflicts_with = "no_cache")]
     pub offline: bool,
@@ -63,6 +67,9 @@ pub enum Command {
     /// Inspect the configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
+
+    /// Show the profile in effect here, and where config, cache, state, and logs live.
+    Paths,
 }
 
 #[derive(Debug, Args)]
