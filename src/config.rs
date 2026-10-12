@@ -26,6 +26,7 @@ pub struct Config {
     /// Extra accounts treated as bots. GitHub App bots are detected automatically.
     pub bots: Vec<String>,
     pub team_reviews: TeamReviews,
+    pub notify: Notify,
     pub score: ScoreWeights,
     /// Table columns, in order. The title column is never dropped on narrow terminals.
     pub columns: Vec<Column>,
@@ -43,6 +44,7 @@ impl Default for Config {
             views: BTreeMap::new(),
             bots: Vec::new(),
             team_reviews: TeamReviews::default(),
+            notify: Notify::default(),
             score: ScoreWeights::default(),
             columns: columns::DEFAULT.to_vec(),
             profile: None,
@@ -62,6 +64,27 @@ fn duration<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<SignedD
         )));
     }
     Ok(duration)
+}
+
+/// Desktop notifications while the UI is open.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Notify {
+    pub enabled: bool,
+    /// The view whose refreshes notify (it keeps refreshing in the
+    /// background); the default view when unset.
+    pub view: Option<String>,
+    pub events: Vec<crate::notify::Event>,
+}
+
+impl Default for Notify {
+    fn default() -> Self {
+        Notify {
+            enabled: true,
+            view: None,
+            events: crate::notify::DEFAULT_EVENTS.to_vec(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -327,6 +350,27 @@ mod tests {
             let text = format!("[team_reviews]\nteams = [{bad:?}]");
             assert!(parse(&text).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn parses_notify_settings() {
+        use crate::notify::Event;
+        let config = Config::default();
+        assert!(config.notify.enabled);
+        assert_eq!(config.notify.events, [Event::MyTurn, Event::Queue]);
+        let config =
+            parse("[notify]\nview = \"mine\"\nevents = [\"my_turn\", \"merged\", \"opened\"]")
+                .unwrap();
+        assert_eq!(config.notify.view.as_deref(), Some("mine"));
+        assert_eq!(
+            config.notify.events,
+            [Event::MyTurn, Event::Merged, Event::Opened]
+        );
+        assert!(parse("[notify]\nevents = [\"everything\"]").is_err());
+        assert!(
+            parse("[notify]\nenable = false").is_err(),
+            "typos are caught"
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod ui;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
@@ -14,14 +15,18 @@ use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-pub use app::{App, Settings, TabSettings};
+pub use app::{App, NotifySettings, Settings, TabSettings};
 use app::{Cmd, FetchedData, Msg};
 
 use crate::github::Client;
 use crate::model::Viewer;
 use crate::progress::Reporter;
 use crate::views::View;
-use crate::{cache, clipboard, fetch, state};
+use crate::{cache, clipboard, fetch, notify, state};
+
+/// Set once showing a notification failed: no point trying (and failing)
+/// again on every refresh.
+static NOTIFY_FAILED: AtomicBool = AtomicBool::new(false);
 
 /// Everything needed to (re)fetch views in the background and save local state.
 pub struct Source {
@@ -75,6 +80,7 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
                     tracing::debug!(tab, prs = data.prs.len(), "refreshed");
                 }
                 Msg::Progress { tab, progress } => tracing::trace!(tab, ?progress, "progress"),
+                Msg::PrState { id, result } => tracing::debug!(%id, ?result, "pr state"),
                 Msg::Tick(_) | Msg::Flash(_) => {}
             }
             let cmds = app.update(msg);
@@ -94,6 +100,12 @@ fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg
             Cmd::Open(url) => tracing::info!(%url, "open"),
             Cmd::Copy(text) => tracing::info!(lines = text.lines().count(), "copy"),
             Cmd::SaveState(_) => tracing::trace!("save state"),
+            Cmd::Notify(notices) => {
+                for n in notices {
+                    tracing::info!(title = %n.title, "notify");
+                }
+            }
+            Cmd::LookupPr(id) => tracing::debug!(%id, "look up pr"),
         }
         match cmd {
             Cmd::Fetch(tab) => {
@@ -124,6 +136,35 @@ fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg
                     Err(e) => format!("couldn't open browser: {e}"),
                 };
                 let _ = tx.send(Msg::Flash(text));
+            }
+            Cmd::Notify(notices) => {
+                if NOTIFY_FAILED.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let tx = tx.clone();
+                // The notifier is a separate program; don't hold up the UI.
+                std::thread::spawn(move || {
+                    for notice in &notices {
+                        if let Err(e) = notify::send(notice) {
+                            if !NOTIFY_FAILED.swap(true, Ordering::Relaxed) {
+                                tracing::warn!(error = %e, "notifications off for this session");
+                                let _ = tx
+                                    .send(Msg::Flash(format!("couldn't show a notification: {e}")));
+                            }
+                            break;
+                        }
+                    }
+                });
+            }
+            Cmd::LookupPr(id) => {
+                let Some(client) = source.client.clone() else {
+                    continue;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let result = client.pr_state(&id).await.map_err(|e| format!("{e:#}"));
+                    let _ = tx.send(Msg::PrState { id, result });
+                });
             }
             Cmd::Copy(text) => {
                 let flash = match clipboard::copy(&text) {

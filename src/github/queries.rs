@@ -101,6 +101,14 @@ query OrgTeams($org: String!, $login: String!) {
 }
 "#;
 
+/// Whether a PR is open, merged, or closed. One PR per request: an id that
+/// no longer resolves makes the whole request fail.
+pub const PR_STATE: &str = r#"
+query PrState($id: ID!) {
+  node(id: $id) { ... on PullRequest { state } }
+}
+"#;
+
 /// How many issues or PRs match a search, without fetching any.
 pub const COUNT: &str = r#"
 query Count($query: String!) {

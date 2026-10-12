@@ -10,8 +10,7 @@ use super::app::{App, PromptKind, SNOOZES, Tab};
 use crate::columns::{self, Column};
 use crate::filter::Mark;
 use crate::model::{
-    ActivityKind, CiState, MergeState, Mergeable, Pr, QueueState, ReviewDecision, ReviewState,
-    Reviewer, Turn,
+    CiState, MergeState, Mergeable, Pr, QueueState, ReviewDecision, ReviewState, Reviewer, Turn,
 };
 use crate::model::{ScoreWeights, breakdown};
 use crate::output::{age, span};
@@ -409,7 +408,7 @@ fn render_detail(
             " · Last: {} ({}) {} {}",
             last.who,
             last.role.label(),
-            activity_verb(last.kind),
+            last.kind.verb(),
             ago(last.at)
         )));
     }
@@ -534,22 +533,6 @@ fn merge_spans(pr: &Pr, now: Timestamp) -> Vec<Span<'static>> {
         }
         _ if pr.queue_enabled => vec![" · merges through a queue".dark_gray()],
         _ => Vec::new(),
-    }
-}
-
-fn activity_verb(kind: ActivityKind) -> &'static str {
-    match kind {
-        ActivityKind::Commit => "pushed a commit",
-        ActivityKind::ForcePush => "force-pushed",
-        ActivityKind::Comment => "commented",
-        ActivityKind::Review(state) => match state {
-            ReviewState::Approved => "approved",
-            ReviewState::ChangesRequested => "requested changes",
-            ReviewState::Commented => "reviewed",
-            ReviewState::Dismissed => "reviewed (dismissed)",
-        },
-        ActivityKind::ReadyForReview => "marked it ready",
-        ActivityKind::ReviewRequested => "requested a review",
     }
 }
 

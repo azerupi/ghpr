@@ -12,6 +12,7 @@ mod github;
 mod glob;
 mod logging;
 mod model;
+mod notify;
 mod output;
 mod profile;
 mod progress;
@@ -197,6 +198,7 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
         tabs.push((settings, source));
     }
     let (tab_settings, tab_sources): (Vec<_>, Vec<_>) = tabs.into_iter().unzip();
+    let notify = notify_settings(&setup.config, &tab_sources, global.offline);
 
     let settings = tui::Settings {
         tabs: tab_settings,
@@ -207,6 +209,7 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
         state: local,
         columns: setup.config.columns.clone(),
         profile: profile.clone(),
+        notify,
     };
     let mut app = tui::App::new(settings, now);
     if !global.no_cache {
@@ -235,6 +238,34 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
         state_path,
     };
     tui::run(app, source).await
+}
+
+/// Which tab notifies: `[notify] view`, else the default view. Its own
+/// filter decides what counts, not `-q`.
+fn notify_settings(
+    config: &Config,
+    tabs: &[tui::TabSource],
+    offline: bool,
+) -> Option<tui::NotifySettings> {
+    if !config.notify.enabled || offline {
+        return None;
+    }
+    let name = config
+        .notify
+        .view
+        .as_deref()
+        .or(config.default_view.as_deref())
+        .unwrap_or("for-me");
+    let Some(tab) = tabs.iter().position(|t| t.view.name == name) else {
+        tracing::warn!(view = name, "notify: no such view here; notifications off");
+        return None;
+    };
+    tracing::info!(view = name, events = ?config.notify.events, "notifications on");
+    Some(tui::NotifySettings {
+        tab,
+        events: config.notify.events.clone(),
+        filter: tabs[tab].view.filter.clone(),
+    })
 }
 
 async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {

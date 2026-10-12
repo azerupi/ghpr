@@ -10,8 +10,8 @@ use crate::progress::{Progress, Reporter};
 use futures::{StreamExt, TryStreamExt, stream};
 
 use super::types::{
-    CountData, GraphQlResponse, NodesData, OrgTeamsData, RawPr, RawPrDetail, SearchData,
-    ViewerOrgsData,
+    CountData, GraphQlResponse, NodesData, OrgTeamsData, PrStateData, RawPr, RawPrDetail,
+    SearchData, ViewerOrgsData,
 };
 
 const GITHUB_GRAPHQL: &str = "https://api.github.com/graphql";
@@ -170,6 +170,16 @@ impl Client {
             .organization
             .map(|o| o.teams.nodes.into_iter().map(|t| t.slug).collect())
             .unwrap_or_default())
+    }
+
+    /// `OPEN`, `MERGED`, or `CLOSED`, for a PR's node id.
+    pub async fn pr_state(&self, id: &str) -> Result<String> {
+        let data: PrStateData = self
+            .graphql(queries::PR_STATE, json!({ "id": id }), &Reporter::none())
+            .await?;
+        data.node
+            .and_then(|n| n.state)
+            .ok_or_else(|| eyre!("{id} is not a pull request"))
     }
 
     /// How many PRs match `query`, without fetching them.

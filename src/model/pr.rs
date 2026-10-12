@@ -217,6 +217,25 @@ pub struct Activity {
     pub at: Timestamp,
 }
 
+impl ActivityKind {
+    /// What someone did: `pushed a commit`, `approved`.
+    pub fn verb(self) -> &'static str {
+        match self {
+            ActivityKind::Commit => "pushed a commit",
+            ActivityKind::ForcePush => "force-pushed",
+            ActivityKind::Comment => "commented",
+            ActivityKind::Review(state) => match state {
+                ReviewState::Approved => "approved",
+                ReviewState::ChangesRequested => "requested changes",
+                ReviewState::Commented => "reviewed",
+                ReviewState::Dismissed => "reviewed (dismissed)",
+            },
+            ActivityKind::ReadyForReview => "marked it ready",
+            ActivityKind::ReviewRequested => "requested a review",
+        }
+    }
+}
+
 /// Who someone is relative to a PR, from the viewer's perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

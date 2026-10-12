@@ -135,6 +135,31 @@ the breakdown; all weights are configurable.
 
 This is stored locally in `$XDG_STATE_HOME/ghpr/state.json`, never on GitHub.
 
+## Notifications
+
+While the UI is open, ghpr shows a desktop notification (`notify-send` on
+Linux, Notification Center on macOS) when a refresh brings news: by default,
+a PR became your turn (a review request, a reply to your review, a mention,
+CI breaking on your PR, ...) or one of your PRs left the merge queue, merged
+or removed. The default view (`for-me`) does the notifying, and keeps
+refreshing in the background while you look at other tabs.
+
+Each thing is announced once: a turn that flickers, or a PR that drops out
+of a search and comes back, doesn't notify again, but a new request or reply
+does. Snoozed and muted PRs never notify, nothing is announced for what was
+already there when ghpr started, and more than three at once become one
+summary. Notifications also flash in the status bar.
+
+```toml
+[notify]
+enabled = true                  # false turns them off
+view = "for-me"                 # the view that notifies (default: default_view)
+events = ["my_turn", "queue"]   # also: team, ready_to_merge, conflict, merged, opened
+```
+
+`team`: a review was requested from one of your teams. `ready_to_merge`,
+`conflict`, `merged`: about your own PRs. `opened`: any PR new to the view.
+
 ## Keys
 
 | Key | Action |
@@ -216,6 +241,9 @@ draft = -80
 conflict = -30
 label.urgent = 50
 repo."acme/core" = 20
+
+[notify]                     # desktop notifications, see Notifications
+events = ["my_turn", "queue"]
 
 [views.backend]              # a custom view (becomes a tab)
 query = "is:open org:acme label:backend"   # GitHub search syntax

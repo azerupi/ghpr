@@ -13,6 +13,7 @@ use crate::columns::Column;
 use crate::filter::complete::{self, Completion};
 use crate::filter::{self, Filter, toggle_term};
 use crate::model::{Pr, ScoreWeights, Turn};
+use crate::notify::{self, Notice, Notifier};
 use crate::progress::Progress;
 use crate::sort::SortSpec;
 use crate::state::{Flags, LocalState, Snooze};
@@ -50,6 +51,16 @@ pub struct Settings {
     pub columns: Vec<Column>,
     /// The profile in effect, shown in the header.
     pub profile: Option<String>,
+    pub notify: Option<NotifySettings>,
+}
+
+/// Which tab's refreshes notify, and about what.
+pub struct NotifySettings {
+    /// Index into `tabs`. It refreshes in the background even when hidden.
+    pub tab: usize,
+    pub events: Vec<notify::Event>,
+    /// The view's own filter; must be valid.
+    pub filter: String,
 }
 
 pub struct TabSettings {
@@ -155,6 +166,8 @@ pub struct App {
     pub page_rows: usize,
     pub quit: bool,
     refresh_interval: SignedDuration,
+    /// The notifying tab and what it has announced.
+    notifier: Option<(usize, Notifier)>,
 }
 
 /// An open text prompt at the bottom of the screen.
@@ -192,6 +205,12 @@ pub enum Msg {
     },
     /// The outcome of a [`Cmd`], shown briefly in the status bar.
     Flash(String),
+    /// Whether a PR that left the notifying view is `OPEN`, `MERGED`, or
+    /// `CLOSED`.
+    PrState {
+        id: String,
+        result: Result<String, String>,
+    },
 }
 
 #[derive(Debug)]
@@ -212,11 +231,19 @@ pub enum Cmd {
     Open(String),
     Copy(String),
     SaveState(LocalState),
+    /// Show desktop notifications.
+    Notify(Vec<Notice>),
+    /// Find out what became of a PR (by node id) that left the notifying view.
+    LookupPr(String),
 }
 
 impl App {
     pub fn new(settings: Settings, now: Timestamp) -> Self {
         let tabs: Vec<Tab> = settings.tabs.into_iter().map(Tab::new).collect();
+        let notifier = settings.notify.filter(|n| n.tab < tabs.len()).map(|n| {
+            let filter = Filter::parse(&n.filter).unwrap_or_default();
+            (n.tab, Notifier::new(n.events, filter))
+        });
         App {
             active: settings.active.min(tabs.len().saturating_sub(1)),
             tabs,
@@ -236,6 +263,7 @@ impl App {
             page_rows: 10,
             quit: false,
             refresh_interval: settings.refresh_interval,
+            notifier,
         }
     }
 
@@ -324,12 +352,19 @@ impl App {
                 {
                     self.flash = None;
                 }
-                // Only the tab on screen refreshes in the background.
+                // The tab on screen refreshes in the background, and so does
+                // the notifying one.
+                let mut cmds = Vec::new();
                 if self.is_stale(self.active) {
-                    self.fetch(self.active)
-                } else {
-                    Vec::new()
+                    cmds.extend(self.fetch(self.active));
                 }
+                if let Some(tab) = self.notify_tab()
+                    && tab != self.active
+                    && self.is_stale(tab)
+                {
+                    cmds.extend(self.fetch(tab));
+                }
+                cmds
             }
             Msg::Progress { tab, progress } => {
                 if let Some(t) = self.tabs.get_mut(tab)
@@ -359,12 +394,24 @@ impl App {
                         t.error = None;
                         self.viewer = data.viewer;
                         self.recompute(tab);
-                        vec![Cmd::SaveState(self.state.clone())]
+                        let mut cmds = vec![Cmd::SaveState(self.state.clone())];
+                        cmds.extend(self.notify(tab));
+                        cmds
                     }
                     Err(error) => {
                         t.error = Some(error);
                         Vec::new()
                     }
+                }
+            }
+            Msg::PrState { id, result } => {
+                let notice = self
+                    .notifier
+                    .as_mut()
+                    .and_then(|(_, n)| n.resolved(&id, result.as_deref().map_err(String::as_str)));
+                match notice {
+                    Some(notice) => self.announce(vec![notice]),
+                    None => Vec::new(),
                 }
             }
             Msg::Flash(text) => {
@@ -924,6 +971,39 @@ impl App {
         }
     }
 
+    // --- Notifications ---
+
+    fn notify_tab(&self) -> Option<usize> {
+        self.notifier.as_ref().map(|(tab, _)| *tab)
+    }
+
+    /// After `tab` refreshed: what to announce, and which gone PRs to look up.
+    fn notify(&mut self, tab: usize) -> Vec<Cmd> {
+        let Some((notify_tab, notifier)) = &mut self.notifier else {
+            return Vec::new();
+        };
+        if *notify_tab != tab {
+            return Vec::new();
+        }
+        let ctx = filter::Context {
+            viewer: &self.viewer,
+            now: self.now,
+            local: Some(&self.state),
+        };
+        let (notices, lookups) = notifier.refresh(&self.tabs[tab].all, &ctx);
+        let mut cmds: Vec<Cmd> = lookups.into_iter().map(|l| Cmd::LookupPr(l.id)).collect();
+        cmds.extend(self.announce(notices));
+        cmds
+    }
+
+    fn announce(&mut self, notices: Vec<Notice>) -> Vec<Cmd> {
+        let Some(first) = notices.first() else {
+            return Vec::new();
+        };
+        self.flash(format!("🔔 {}", first.title));
+        vec![Cmd::Notify(notices)]
+    }
+
     // --- Helpers ---
 
     fn fetch(&mut self, index: usize) -> Vec<Cmd> {
@@ -1023,6 +1103,7 @@ pub mod tests {
             state: LocalState::new("2026-09-01T00:00:00Z".parse().unwrap()),
             columns: crate::columns::DEFAULT.to_vec(),
             profile: None,
+            notify: None,
         }
     }
 
@@ -1752,6 +1833,92 @@ pub mod tests {
         assert!(
             shown(&app).is_empty(),
             "unmuted, so no longer matches `muted`"
+        );
+    }
+
+    fn notifying(views: &[&str], active: usize) -> App {
+        let mut settings = settings_with(views, false);
+        settings.active = active;
+        settings.notify = Some(NotifySettings {
+            tab: 0,
+            events: crate::notify::DEFAULT_EVENTS.to_vec(),
+            filter: String::new(),
+        });
+        App::new(settings, now())
+    }
+
+    #[test]
+    fn the_notifying_tab_refreshes_while_hidden() {
+        let mut app = notifying(&["for-me", "mine"], 1);
+        assert_eq!(app.init(), [Cmd::Fetch(1)]);
+        assert_eq!(
+            app.update(Msg::Tick(now())),
+            [Cmd::Fetch(0)],
+            "for-me, behind mine"
+        );
+        app.update(fetched_for(0, vec![]));
+        app.update(fetched_for(1, vec![]));
+        let later = Msg::Tick(now() + SignedDuration::from_mins(5));
+        assert_eq!(app.update(later), [Cmd::Fetch(1), Cmd::Fetch(0)]);
+    }
+
+    #[test]
+    fn refreshes_announce_what_became_your_turn() {
+        let mut quiet = pr(1);
+        quiet.turn = Turn::Reviewers;
+        let mut app = notifying(&["for-me"], 0).with_cache(0, vec![pr(2)], "me".into(), now());
+        let cmds = app.update(fetched(vec![quiet.clone(), pr(2)]));
+        assert!(
+            !cmds.iter().any(|c| matches!(c, Cmd::Notify(_))),
+            "the first refresh after the cache only records"
+        );
+        let cmds = app.update(fetched(vec![pr(1), pr(2)]));
+        let notices: Vec<&Notice> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                Cmd::Notify(n) => Some(n),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Your turn · acme/api#1");
+        assert_eq!(
+            app.flash.as_ref().map(|(t, _)| t.as_str()),
+            Some("🔔 Your turn · acme/api#1")
+        );
+    }
+
+    #[test]
+    fn gone_prs_are_looked_up_and_announced() {
+        let mut settings = settings("for-me", false);
+        settings.notify = Some(NotifySettings {
+            tab: 0,
+            events: vec![crate::notify::Event::Merged],
+            filter: String::new(),
+        });
+        let mut app = App::new(settings, now());
+        let mut mine = pr(1);
+        mine.author = Some("me".into());
+        app.update(fetched(vec![mine]));
+        let cmds = app.update(fetched(vec![]));
+        assert!(cmds.contains(&Cmd::LookupPr("PR_1".into())), "{cmds:?}");
+        let cmds = app.update(Msg::PrState {
+            id: "PR_1".into(),
+            result: Ok("MERGED".into()),
+        });
+        assert!(matches!(&cmds[..], [Cmd::Notify(n)] if n[0].title == "Merged · acme/api#1"));
+    }
+
+    #[test]
+    fn no_notifier_no_notices() {
+        let mut app = app_with(2);
+        app.update(fetched(vec![pr(1)]));
+        let cmds = app.update(fetched(vec![pr(1), pr(3)]));
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, Cmd::Notify(_) | Cmd::LookupPr(_)))
         );
     }
 }

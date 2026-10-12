@@ -50,6 +50,17 @@ pub struct RawTeam {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PrStateData {
+    pub node: Option<RawPrState>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawPrState {
+    /// `OPEN`, `MERGED`, or `CLOSED`; missing when the node isn't a PR.
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CountData {
     pub search: RawCount,
 }
