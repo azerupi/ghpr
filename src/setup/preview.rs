@@ -361,8 +361,10 @@ mod tests {
     #[test]
     fn describes_views() {
         let config = Config::default();
-        let view =
-            |name| crate::views::resolve(Some(name), &[], &config, || "o/r".parse().ok()).unwrap();
+        let view = |name| {
+            crate::views::resolve(Some(name), &[], &config, || vec!["o/r".parse().unwrap()])
+                .unwrap()
+        };
         assert_eq!(
             describe(&view("for-me"), 2),
             "review requests, your PRs, and PRs you reviewed or were mentioned in when it's your turn, + 2 teams"

@@ -802,7 +802,7 @@ fn view_preview(w: &Wizard, i: usize, out: &mut Out) {
     let teams = profile.teams.len();
     let slot = w.samples.get(&(profile.source.clone(), name.clone()));
     let config = w.config(i).ok();
-    let repo = w.env.current_repo.clone();
+    let repo = w.env.current_repos.clone();
     let view = slot.and_then(|s| s.view.clone()).or_else(|| {
         let config = config.as_ref()?;
         crate::views::resolve(Some(name), &[], config, || repo).ok()

@@ -31,7 +31,7 @@ pub struct Env {
     pub accounts: Result<Vec<Account>, String>,
     /// Where setup runs, for the "where does each profile apply" preview.
     pub here: Whereabouts,
-    pub current_repo: Option<RepoName>,
+    pub current_repos: Vec<RepoName>,
     /// The directory holding `state.json`.
     pub state_root: Option<PathBuf>,
     pub exists: Box<dyn Fn(&Path) -> bool>,
@@ -742,7 +742,7 @@ impl Wizard {
         let mut cmds = Vec::new();
         for name in views::names(&config) {
             let key = (source.clone(), name.clone());
-            let repo = self.env.current_repo.clone();
+            let repo = self.env.current_repos.clone();
             match views::resolve(Some(&name), &[], &config, || repo) {
                 Ok(view) => {
                     let same = self
@@ -1031,7 +1031,7 @@ pub(super) mod tests {
                 home: Some("/home/me".into()),
                 ..Whereabouts::default()
             },
-            current_repo: None,
+            current_repos: Vec::new(),
             state_root: Some("/home/me/.local/state/ghpr".into()),
             exists: Box::new(|p| {
                 p == Path::new("/home/me/.local/state/ghpr/state.json")
@@ -1294,7 +1294,7 @@ pub(super) mod tests {
 
         // A late result for searches that are no longer wanted is dropped.
         let mut stale =
-            crate::views::resolve(Some("mine"), &[], &Config::default(), || None).unwrap();
+            crate::views::resolve(Some("mine"), &[], &Config::default(), Vec::new).unwrap();
         stale.searches[0].query.push_str(" old");
         w.on_data(Data::Sample {
             source: Source::Gh("me".into()),

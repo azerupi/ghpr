@@ -18,7 +18,7 @@ pub fn filter(current: &OsStr) -> Vec<CompletionCandidate> {
     let now = jiff::Timestamp::now();
     let config = load_config();
     let profile = config.profile.as_ref().map(|p| p.name.as_str());
-    let cached = views::resolve(None, &[], &config, git::current_repo)
+    let cached = views::resolve(None, &[], &config, git::current_repos)
         .ok()
         .and_then(|view| cache::load(&cache::path(&cache::default_dir(profile).ok()?, &view)));
     let (prs, viewer) = cached.map_or((Vec::new(), String::new()), |c| (c.prs, c.viewer));

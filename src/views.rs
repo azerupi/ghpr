@@ -51,12 +51,12 @@ pub fn names(config: &Config) -> Vec<String> {
 }
 
 /// Resolve `name` (or the default view), restricted to `repos` if any are given.
-/// `current_repo` is only consulted by the `repo` view.
+/// `current_repos` is only consulted by the `repo` view.
 pub fn resolve(
     name: Option<&str>,
     repos: &[RepoName],
     config: &Config,
-    current_repo: impl FnOnce() -> Option<RepoName>,
+    current_repos: impl FnOnce() -> Vec<RepoName>,
 ) -> Result<View> {
     let name = name
         .or(config.default_view.as_deref())
@@ -111,10 +111,12 @@ pub fn resolve(
         ),
         "repo" => {
             let repos = if repos.is_empty() {
-                match current_repo() {
-                    Some(repo) => vec![repo],
-                    None => bail!("not inside a GitHub repository; pass one with -R OWNER/REPO"),
+                // A fork's PRs are mostly on its upstream; both are searched.
+                let here = current_repos();
+                if here.is_empty() {
+                    bail!("not inside a GitHub repository; pass one with -R OWNER/REPO");
                 }
+                here
             } else {
                 repos.to_vec()
             };
@@ -163,8 +165,8 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn no_repo() -> Option<RepoName> {
-        None
+    fn no_repo() -> Vec<RepoName> {
+        Vec::new()
     }
 
     fn queries(view: &View) -> Vec<&str> {
@@ -229,10 +231,22 @@ mod tests {
 
     #[test]
     fn repo_view_uses_current_repo() {
-        let view = resolve(Some("repo"), &[], &Config::default(), || Some(repo("o/r"))).unwrap();
+        let view = resolve(Some("repo"), &[], &Config::default(), || vec![repo("o/r")]).unwrap();
         assert_eq!(
             queries(&view),
             ["is:pr is:open archived:false sort:updated-desc repo:o/r"]
+        );
+    }
+
+    #[test]
+    fn repo_view_in_a_fork_covers_upstream_and_the_fork() {
+        let here = || vec![repo("ros2-rust/ros2_rust"), repo("me/ros2_rust")];
+        let view = resolve(Some("repo"), &[], &Config::default(), here).unwrap();
+        assert_eq!(
+            queries(&view),
+            [
+                "is:pr is:open archived:false sort:updated-desc repo:ros2-rust/ros2_rust repo:me/ros2_rust"
+            ]
         );
     }
 

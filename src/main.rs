@@ -113,7 +113,7 @@ struct Setup {
 
 fn setup(global: &GlobalArgs, view: Option<&str>) -> Result<Setup> {
     let config = load_config(global)?;
-    let view = views::resolve(view, &global.repos, &config, git::current_repo)?;
+    let view = views::resolve(view, &global.repos, &config, git::current_repos)?;
     let viewer = Viewer {
         login: String::new(),
         bots: config.bots.clone(),
@@ -178,9 +178,12 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
                 setup.sort.clone(),
             )
         } else {
-            let Ok(view) =
-                views::resolve(Some(&name), &global.repos, &setup.config, git::current_repo)
-            else {
+            let Ok(view) = views::resolve(
+                Some(&name),
+                &global.repos,
+                &setup.config,
+                git::current_repos,
+            ) else {
                 continue;
             };
             let sort = SortSpec::parse(&view.sort).map_err(|e| eyre!("view {name}: {e}"))?;

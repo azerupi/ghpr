@@ -138,7 +138,7 @@ async fn run(path: &Path, doc: Option<DocumentMut>, intro: Option<Intro>) -> Res
         doc: doc.unwrap_or_else(write::new_document),
         accounts: accounts::gh_accounts(),
         here: Whereabouts::current(None),
-        current_repo: git::current_repo(),
+        current_repos: git::current_repos(),
         state_root: state_root(),
         exists: Box::new(|p| p.exists()),
         env_set: Box::new(|var| std::env::var(var).is_ok_and(|v| !v.trim().is_empty())),
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn cut_short_samples_are_cached_as_stale() {
         let view =
-            crate::views::resolve(Some("mine"), &[], &config::Config::default(), || None).unwrap();
+            crate::views::resolve(Some("mine"), &[], &config::Config::default(), Vec::new).unwrap();
         let mut sample = *wizard::tests::sample(view, vec![]);
         let plan = Plan {
             text: "[profiles.p]\ndefault = true\nrefresh_interval = \"2m\"\n".into(),
