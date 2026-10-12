@@ -20,6 +20,9 @@ use crate::state::{Flags, LocalState, Snooze};
 
 /// How long a transient status message stays visible.
 const FLASH_FOR: SignedDuration = SignedDuration::from_secs(4);
+/// How often an instance that doesn't notify checks whether the one that
+/// did has gone. Only a local lock, so it's cheap.
+const NOTIFY_LOCK_RETRY: SignedDuration = SignedDuration::from_secs(30);
 
 /// One-key filter toggles: key, filter term, description.
 pub const TOGGLES: &[(char, &str, &str)] = &[
@@ -168,6 +171,10 @@ pub struct App {
     refresh_interval: SignedDuration,
     /// The notifying tab and what it has announced.
     notifier: Option<(usize, Notifier)>,
+    /// This instance holds the notify lock: with several ghprs open for a
+    /// profile, only one notifies.
+    notifying: bool,
+    lock_attempt: Option<Timestamp>,
 }
 
 /// An open text prompt at the bottom of the screen.
@@ -205,6 +212,8 @@ pub enum Msg {
     },
     /// The outcome of a [`Cmd`], shown briefly in the status bar.
     Flash(String),
+    /// Whether this instance got the notify lock.
+    NotifyLock(bool),
     /// Whether a PR that left the notifying view is `OPEN`, `MERGED`, or
     /// `CLOSED`.
     PrState {
@@ -235,6 +244,8 @@ pub enum Cmd {
     Notify(Vec<Notice>),
     /// Find out what became of a PR (by node id) that left the notifying view.
     LookupPr(String),
+    /// Try to become the instance that notifies.
+    TryNotifyLock,
 }
 
 impl App {
@@ -264,6 +275,8 @@ impl App {
             quit: false,
             refresh_interval: settings.refresh_interval,
             notifier,
+            notifying: false,
+            lock_attempt: None,
         }
     }
 
@@ -288,7 +301,9 @@ impl App {
 
     /// Commands to run at startup.
     pub fn init(&mut self) -> Vec<Cmd> {
-        self.fetch(self.active)
+        let mut cmds = self.fetch(self.active);
+        cmds.extend(self.try_notify_lock());
+        cmds
     }
 
     pub fn tab(&self) -> &Tab {
@@ -364,6 +379,7 @@ impl App {
                 {
                     cmds.extend(self.fetch(tab));
                 }
+                cmds.extend(self.try_notify_lock());
                 cmds
             }
             Msg::Progress { tab, progress } => {
@@ -403,6 +419,15 @@ impl App {
                         Vec::new()
                     }
                 }
+            }
+            Msg::NotifyLock(acquired) => {
+                // Another instance may have announced things meanwhile, so a
+                // new holder starts over: its next refresh only records.
+                if acquired && !self.notifying {
+                    self.notifier = self.notifier.take().map(|(tab, n)| (tab, n.restart()));
+                }
+                self.notifying = acquired;
+                Vec::new()
             }
             Msg::PrState { id, result } => {
                 let notice = self
@@ -973,8 +998,24 @@ impl App {
 
     // --- Notifications ---
 
+    /// The tab that notifies, if this instance is the one notifying.
     fn notify_tab(&self) -> Option<usize> {
-        self.notifier.as_ref().map(|(tab, _)| *tab)
+        self.notifier
+            .as_ref()
+            .filter(|_| self.notifying)
+            .map(|(tab, _)| *tab)
+    }
+
+    /// Ask for the notify lock, unless it's held or was asked for recently.
+    fn try_notify_lock(&mut self) -> Vec<Cmd> {
+        let due = self
+            .lock_attempt
+            .is_none_or(|at| self.now.duration_since(at) >= NOTIFY_LOCK_RETRY);
+        if self.notifier.is_none() || self.notifying || !due {
+            return Vec::new();
+        }
+        self.lock_attempt = Some(self.now);
+        vec![Cmd::TryNotifyLock]
     }
 
     /// After `tab` refreshed: what to announce, and which gone PRs to look up.
@@ -982,7 +1023,7 @@ impl App {
         let Some((notify_tab, notifier)) = &mut self.notifier else {
             return Vec::new();
         };
-        if *notify_tab != tab {
+        if *notify_tab != tab || !self.notifying {
             return Vec::new();
         }
         let ctx = filter::Context {
@@ -1836,7 +1877,8 @@ pub mod tests {
         );
     }
 
-    fn notifying(views: &[&str], active: usize) -> App {
+    /// Notifying from tab 0, without the notify lock yet.
+    fn standby(views: &[&str], active: usize) -> App {
         let mut settings = settings_with(views, false);
         settings.active = active;
         settings.notify = Some(NotifySettings {
@@ -1847,10 +1889,59 @@ pub mod tests {
         App::new(settings, now())
     }
 
+    /// Notifying from tab 0, holding the notify lock.
+    fn notifying(views: &[&str], active: usize) -> App {
+        let mut app = standby(views, active);
+        app.update(Msg::NotifyLock(true));
+        app
+    }
+
+    fn notices(cmds: &[Cmd]) -> Vec<&str> {
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Notify(n) => Some(n),
+                _ => None,
+            })
+            .flatten()
+            .map(|n| n.title.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn only_the_lock_holder_notifies() {
+        let mut app = standby(&["for-me", "mine"], 1);
+        assert_eq!(app.init(), [Cmd::Fetch(1), Cmd::TryNotifyLock]);
+        app.update(Msg::NotifyLock(false));
+        assert!(
+            app.update(Msg::Tick(now())).is_empty(),
+            "no background refresh of for-me, and no retry yet"
+        );
+        let mut quiet = pr(1);
+        quiet.turn = Turn::Reviewers;
+        app.update(fetched_for(0, vec![quiet.clone()]));
+        assert!(notices(&app.update(fetched_for(0, vec![pr(1)]))).is_empty());
+
+        // The other instance quit: this one takes over on the next try.
+        let later = now() + SignedDuration::from_secs(30);
+        assert_eq!(app.update(Msg::Tick(later)), [Cmd::TryNotifyLock]);
+        app.update(Msg::NotifyLock(true));
+        let much_later = Msg::Tick(now() + SignedDuration::from_mins(6));
+        assert!(
+            !app.update(much_later).contains(&Cmd::TryNotifyLock),
+            "held now"
+        );
+        // It starts over: the first refresh only records, the next notifies.
+        assert!(notices(&app.update(fetched_for(0, vec![quiet]))).is_empty());
+        assert_eq!(
+            notices(&app.update(fetched_for(0, vec![pr(1)]))),
+            ["Your turn · acme/api#1"]
+        );
+    }
+
     #[test]
     fn the_notifying_tab_refreshes_while_hidden() {
         let mut app = notifying(&["for-me", "mine"], 1);
-        assert_eq!(app.init(), [Cmd::Fetch(1)]);
+        assert_eq!(app.init(), [Cmd::Fetch(1)], "the lock is held already");
         assert_eq!(
             app.update(Msg::Tick(now())),
             [Cmd::Fetch(0)],
@@ -1898,6 +1989,7 @@ pub mod tests {
             filter: String::new(),
         });
         let mut app = App::new(settings, now());
+        app.update(Msg::NotifyLock(true));
         let mut mine = pr(1);
         mine.author = Some("me".into());
         app.update(fetched(vec![mine]));

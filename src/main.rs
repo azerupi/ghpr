@@ -235,6 +235,8 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
         tabs: tab_sources,
         viewer: setup.viewer,
         limit: UI_LIMIT,
+        // Next to the profile's state, so each profile notifies separately.
+        notify_lock: state_path.as_ref().map(|p| p.with_file_name("notify.lock")),
         state_path,
     };
     tui::run(app, source).await

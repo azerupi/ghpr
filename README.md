@@ -150,6 +150,12 @@ does. Snoozed and muted PRs never notify, nothing is announced for what was
 already there when ghpr started, and more than three at once become one
 summary. Notifications also flash in the status bar.
 
+With several ghpr windows open for the same profile, only one notifies (it
+holds `notify.lock` in the profile's state directory). If it closes, another
+takes over within half a minute, starting afresh: what changes during the
+handover isn't announced. News arrives with the next refresh of the
+notifying view, so within `refresh_interval` (5 minutes by default).
+
 ```toml
 [notify]
 enabled = true                  # false turns them off

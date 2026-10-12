@@ -9,6 +9,9 @@
 //! or reply does.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use color_eyre::eyre::{Result, bail};
@@ -96,6 +99,11 @@ impl Notifier {
             pending: HashMap::new(),
             primed: false,
         }
+    }
+
+    /// The same settings, with nothing announced or remembered yet.
+    pub fn restart(self) -> Self {
+        Notifier::new(self.events, self.filter)
     }
 
     fn wants(&self, event: Event) -> bool {
@@ -324,6 +332,30 @@ pub fn batch(notices: Vec<Notice>) -> Vec<Notice> {
         url: String::new(),
         urgent: notices.iter().any(|n| n.urgent),
     }]
+}
+
+/// Become the one ghpr (per profile) that notifies, by holding an exclusive
+/// lock on `path`. `Ok(Some)` while held; dropping the file releases it, and
+/// so does exiting or crashing. `Ok(None)` when another ghpr holds it.
+pub fn try_lock(path: &Path) -> Result<Option<File>> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    match file.try_lock() {
+        Ok(()) => {
+            // Which process has it, for anyone wondering.
+            file.set_len(0)?;
+            writeln!(file, "{}", std::process::id())?;
+            Ok(Some(file))
+        }
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(e)) => Err(e.into()),
+    }
 }
 
 /// Show a notice on the desktop. Blocks until the notifier exits; its output
@@ -609,6 +641,28 @@ mod tests {
         let mut p = pr(2);
         p.last_activity.as_mut().unwrap().role = Role::Author;
         assert_eq!(reason(&p, "me"), "alice pushed a commit");
+    }
+
+    #[test]
+    fn one_holder_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles/work/notify.lock");
+        let held = try_lock(&path).unwrap();
+        assert!(held.is_some());
+        assert!(try_lock(&path).unwrap().is_none(), "already held");
+        drop(held);
+        // A process another test spawns at this moment can briefly share the
+        // file until it execs (which closes it), so allow a moment.
+        let retaken = (0..50).find_map(|_| {
+            let lock = try_lock(&path).unwrap();
+            if lock.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            lock
+        });
+        assert!(retaken.is_some(), "released on drop");
+        let pid = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(pid.trim(), std::process::id().to_string());
     }
 
     #[test]

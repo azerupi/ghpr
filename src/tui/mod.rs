@@ -37,6 +37,8 @@ pub struct Source {
     pub viewer: Viewer,
     pub limit: u32,
     pub state_path: Option<PathBuf>,
+    /// Held by the one instance per profile that notifies.
+    pub notify_lock: Option<PathBuf>,
 }
 
 pub struct TabSource {
@@ -47,6 +49,8 @@ pub struct TabSource {
 pub async fn run(mut app: App, source: Source) -> Result<()> {
     let source = Arc::new(source);
     let (tx, mut rx) = mpsc::unbounded_channel();
+    // Kept open for the whole session; closing it (or exiting) releases it.
+    let mut lock: Option<std::fs::File> = None;
     let mut events = EventStream::new();
     // Fast enough to animate the refresh spinner; cheap otherwise.
     let mut ticker = tokio::time::interval(Duration::from_millis(250));
@@ -54,7 +58,7 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
     let mut terminal = ratatui::init();
     let result = async {
         let cmds = app.init();
-        run_cmds(cmds, &source, &tx);
+        run_cmds(cmds, &source, &tx, &mut lock);
         while !app.quit {
             terminal.draw(|frame| ui::render(frame, &mut app))?;
             let msg = tokio::select! {
@@ -81,10 +85,11 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
                 }
                 Msg::Progress { tab, progress } => tracing::trace!(tab, ?progress, "progress"),
                 Msg::PrState { id, result } => tracing::debug!(%id, ?result, "pr state"),
+                Msg::NotifyLock(acquired) => tracing::debug!(acquired, "notify lock"),
                 Msg::Tick(_) | Msg::Flash(_) => {}
             }
             let cmds = app.update(msg);
-            run_cmds(cmds, &source, &tx);
+            run_cmds(cmds, &source, &tx, &mut lock);
         }
         Ok(())
     }
@@ -93,7 +98,12 @@ pub async fn run(mut app: App, source: Source) -> Result<()> {
     result
 }
 
-fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg>) {
+fn run_cmds(
+    cmds: Vec<Cmd>,
+    source: &Arc<Source>,
+    tx: &mpsc::UnboundedSender<Msg>,
+    lock: &mut Option<std::fs::File>,
+) {
     for cmd in cmds {
         match &cmd {
             Cmd::Fetch(tab) => tracing::debug!(tab, "refresh"),
@@ -106,6 +116,7 @@ fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg
                 }
             }
             Cmd::LookupPr(id) => tracing::debug!(%id, "look up pr"),
+            Cmd::TryNotifyLock => tracing::trace!("try notify lock"),
         }
         match cmd {
             Cmd::Fetch(tab) => {
@@ -155,6 +166,25 @@ fn run_cmds(cmds: Vec<Cmd>, source: &Arc<Source>, tx: &mpsc::UnboundedSender<Msg
                         }
                     }
                 });
+            }
+            Cmd::TryNotifyLock => {
+                let acquired = match &source.notify_lock {
+                    // Nowhere to keep a lock: notify, as without one.
+                    None => true,
+                    Some(path) => match notify::try_lock(path) {
+                        Ok(Some(file)) => {
+                            tracing::info!(path = %path.display(), "notifying (holding the notify lock)");
+                            *lock = Some(file);
+                            true
+                        }
+                        Ok(None) => false,
+                        Err(e) => {
+                            tracing::warn!(path = %path.display(), error = %e, "can't lock; notifying anyway");
+                            true
+                        }
+                    },
+                };
+                let _ = tx.send(Msg::NotifyLock(acquired));
             }
             Cmd::LookupPr(id) => {
                 let Some(client) = source.client.clone() else {
