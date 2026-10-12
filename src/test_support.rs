@@ -2,7 +2,9 @@
 
 use jiff::Timestamp;
 
-use crate::model::{Activity, ActivityKind, CiState, Mergeable, Pr, ReviewDecision, Role, Turn};
+use crate::model::{
+    Activity, ActivityKind, CiState, MergeState, Mergeable, Pr, ReviewDecision, Role, Turn,
+};
 
 pub fn now() -> Timestamp {
     "2026-09-28T12:00:00Z".parse().unwrap()
@@ -29,6 +31,9 @@ pub fn pr_titled(number: u64, title: &str) -> Pr {
         review_decision: Some(ReviewDecision::Approved),
         ci: CiState::Pass,
         mergeable: Mergeable::Clean,
+        merge_state: MergeState::Clean,
+        queue_enabled: false,
+        queue: None,
         requested_reviewers: Vec::new(),
         my_review: None,
         unresolved_threads: 0,

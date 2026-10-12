@@ -121,6 +121,7 @@ enum Field {
     Created,
     Updated,
     Turn,
+    Merge,
     Waiting,
     Last,
     Mine,
@@ -147,6 +148,7 @@ const FIELDS: &[(&str, Field)] = &[
     ("created", Field::Created),
     ("updated", Field::Updated),
     ("turn", Field::Turn),
+    ("merge", Field::Merge),
     ("waiting", Field::Waiting),
     ("last", Field::Last),
     ("mine", Field::Mine),
@@ -224,6 +226,7 @@ fn field_value(pr: &Pr, field: Field, weights: &ScoreWeights, now: Timestamp) ->
         Field::Created => age(now, pr.created_at),
         Field::Updated => age(now, pr.updated_at),
         Field::Turn => pr.turn.label().to_owned(),
+        Field::Merge => pr.merge_status(),
         Field::Waiting => age(now, pr.waiting_since),
         Field::Last => last_role(pr).to_owned(),
         Field::Mine => pr.my_review.map_or("-", |r| r.state.label()).to_owned(),
@@ -243,7 +246,12 @@ fn last_role(pr: &Pr) -> &'static str {
 
 /// A compact "how long ago": `5m`, `3h`, `4d`, `6w`, `2y`.
 pub fn age(now: Timestamp, then: Timestamp) -> String {
-    let secs = (now.as_second() - then.as_second()).max(0);
+    span(now.as_second() - then.as_second())
+}
+
+/// A rough length of time: `12m`, `5h`, `3d`, `2w`, `1y`.
+pub fn span(secs: i64) -> String {
+    let secs = secs.max(0);
     let (minute, hour, day) = (60, 3600, 86_400);
     match secs {
         s if s < hour => format!("{}m", s / minute),

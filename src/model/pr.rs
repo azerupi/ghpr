@@ -25,6 +25,12 @@ pub struct Pr {
     pub review_decision: Option<ReviewDecision>,
     pub ci: CiState,
     pub mergeable: Mergeable,
+    /// What GitHub says about merging it now (branch protection included).
+    pub merge_state: MergeState,
+    /// The repo merges through a merge queue (for the PR's base branch).
+    pub queue_enabled: bool,
+    /// Its place in the merge queue, while it's in one.
+    pub queue: Option<QueueEntry>,
 
     /// Outstanding review requests (reviewers who have reviewed are no longer listed).
     pub requested_reviewers: Vec<Reviewer>,
@@ -79,6 +85,83 @@ impl CiState {
             CiState::Fail => "fail",
             CiState::Pending => "pending",
             CiState::None => "-",
+        }
+    }
+}
+
+impl Pr {
+    /// Merge queue place or merge state, in a word or two: `queue 2`,
+    /// `behind`, `clean`; `-` when unknown.
+    pub fn merge_status(&self) -> String {
+        match self.queue {
+            Some(q) if q.state == QueueState::Unmergeable => "ejecting".to_owned(),
+            Some(q) => format!("queue {}", q.position),
+            None if self.merge_state == MergeState::Unknown => "-".to_owned(),
+            None => self.merge_state.label().to_owned(),
+        }
+    }
+}
+
+/// GitHub's `mergeStateStatus`: whether the merge button would work now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeState {
+    /// Mergeable, checks passing.
+    Clean,
+    /// Mergeable, but some checks that aren't required are failing or pending.
+    Unstable,
+    /// Branch protection wants the branch brought up to date first.
+    Behind,
+    /// Something branch protection requires is missing: reviews, checks, ...
+    Blocked,
+    /// Merge conflicts.
+    Conflict,
+    /// Not computed yet (GitHub works it out lazily), or unknown to ghpr.
+    Unknown,
+}
+
+impl MergeState {
+    pub fn label(self) -> &'static str {
+        match self {
+            MergeState::Clean => "clean",
+            MergeState::Unstable => "unstable",
+            MergeState::Behind => "behind",
+            MergeState::Blocked => "blocked",
+            MergeState::Conflict => "conflict",
+            MergeState::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueEntry {
+    /// As GitHub reports it.
+    pub position: u32,
+    pub state: QueueState,
+    pub enqueued_at: Timestamp,
+    /// GitHub's estimate of the time left, in seconds.
+    pub eta_secs: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueState {
+    Queued,
+    AwaitingChecks,
+    Mergeable,
+    /// About to be removed from the queue: its checks failed, or it conflicts.
+    Unmergeable,
+    Locked,
+}
+
+impl QueueState {
+    pub fn label(self) -> &'static str {
+        match self {
+            QueueState::Queued => "queued",
+            QueueState::AwaitingChecks => "awaiting checks",
+            QueueState::Mergeable => "mergeable",
+            QueueState::Unmergeable => "unmergeable",
+            QueueState::Locked => "locked",
         }
     }
 }
@@ -177,6 +260,8 @@ pub enum Turn {
     Team,
     /// Approved, green, no conflicts: only needs merging.
     Merge,
+    /// In the merge queue: nothing to do but wait.
+    Queued,
     Author,
     Reviewers,
     /// Draft, failing CI, conflicts, or a blocking label.
@@ -189,6 +274,7 @@ impl Turn {
             Turn::Me => "me",
             Turn::Team => "team",
             Turn::Merge => "merge",
+            Turn::Queued => "queued",
             Turn::Author => "author",
             Turn::Reviewers => "reviewers",
             Turn::Blocked => "blocked",

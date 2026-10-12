@@ -4,7 +4,8 @@ use color_eyre::eyre::{Result, eyre};
 
 use super::turn::{self, Event, Facts};
 use super::{
-    ActivityKind, CiState, Mergeable, MyReview, Pr, RepoName, ReviewDecision, ReviewState, Reviewer,
+    ActivityKind, CiState, MergeState, Mergeable, MyReview, Pr, QueueEntry, QueueState, RepoName,
+    ReviewDecision, ReviewState, Reviewer,
 };
 use crate::github::types::{RawActor, RawPr, RawPrDetail, RawReviewer, RawTimelineItem};
 
@@ -29,6 +30,16 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
         .unwrap_or_default();
     let review_decision = raw.review_decision.as_deref().and_then(review_decision);
     let mergeable = mergeable(&raw.mergeable);
+    let merge_state = raw
+        .merge_state_status
+        .as_deref()
+        .map_or(MergeState::Unknown, merge_state);
+    let queue = raw.merge_queue_entry.map(|entry| QueueEntry {
+        position: entry.position,
+        state: queue_state(&entry.state),
+        enqueued_at: entry.enqueued_at,
+        eta_secs: entry.estimated_time_to_merge,
+    });
     let author_is_bot = raw.author.as_ref().is_some_and(RawActor::is_bot);
     let author = raw.author.map(|a| a.login);
 
@@ -78,6 +89,9 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
             review_decision,
             ci,
             mergeable,
+            merge_state,
+            queue_enabled: raw.is_merge_queue_enabled,
+            queue,
             requested: &requested_reviewers,
             created_at: raw.created_at,
             my_reviews: &my_reviews,
@@ -106,6 +120,9 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
         review_decision,
         ci,
         mergeable,
+        merge_state,
+        queue_enabled: raw.is_merge_queue_enabled,
+        queue,
         requested_reviewers,
         my_review: derived.my_review,
         unresolved_threads,
@@ -232,6 +249,28 @@ fn ci_state(value: &str) -> CiState {
     }
 }
 
+fn merge_state(value: &str) -> MergeState {
+    match value {
+        "CLEAN" | "HAS_HOOKS" => MergeState::Clean,
+        "UNSTABLE" => MergeState::Unstable,
+        "BEHIND" => MergeState::Behind,
+        // A draft can't be merged; the turn already says so.
+        "BLOCKED" | "DRAFT" => MergeState::Blocked,
+        "DIRTY" => MergeState::Conflict,
+        _ => MergeState::Unknown,
+    }
+}
+
+fn queue_state(value: &str) -> QueueState {
+    match value {
+        "AWAITING_CHECKS" => QueueState::AwaitingChecks,
+        "MERGEABLE" => QueueState::Mergeable,
+        "UNMERGEABLE" => QueueState::Unmergeable,
+        "LOCKED" => QueueState::Locked,
+        _ => QueueState::Queued,
+    }
+}
+
 fn mergeable(value: &str) -> Mergeable {
     match value {
         "MERGEABLE" => Mergeable::Clean,
@@ -251,6 +290,41 @@ mod tests {
     fn convert(value: serde_json::Value) -> Pr {
         let raw: RawPr = serde_json::from_value(value).unwrap();
         build_pr(raw, None, &Viewer::default()).unwrap()
+    }
+
+    #[test]
+    fn reads_merge_state_and_queue_entries() {
+        let pr = convert(fixture());
+        assert_eq!(pr.merge_state, MergeState::Unknown, "missing in older data");
+        assert_eq!(pr.queue, None);
+
+        let mut node = fixture();
+        node["mergeStateStatus"] = "BEHIND".into();
+        node["isMergeQueueEnabled"] = true.into();
+        node["mergeQueueEntry"] = serde_json::json!({
+            "position": 3,
+            "state": "AWAITING_CHECKS",
+            "enqueuedAt": "2026-09-27T10:00:00Z",
+            "estimatedTimeToMerge": null,
+        });
+        let pr = convert(node);
+        assert_eq!(pr.merge_state, MergeState::Behind);
+        assert!(pr.queue_enabled);
+        let entry = pr.queue.unwrap();
+        assert_eq!(
+            (entry.position, entry.state),
+            (3, QueueState::AwaitingChecks)
+        );
+        assert_eq!(entry.eta_secs, None);
+        assert_eq!(pr.merge_status(), "queue 3");
+        for (raw, state) in [
+            ("HAS_HOOKS", MergeState::Clean),
+            ("UNSTABLE", MergeState::Unstable),
+            ("DIRTY", MergeState::Conflict),
+            ("SOMETHING_NEW", MergeState::Unknown),
+        ] {
+            assert_eq!(merge_state(raw), state, "{raw}");
+        }
     }
 
     #[test]

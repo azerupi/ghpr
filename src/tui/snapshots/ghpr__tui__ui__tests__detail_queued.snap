@@ -1,0 +1,16 @@
+---
+source: src/tui/ui.rs
+expression: screen
+---
+" ghpr   for-me                                                                                       [ ] views · ? help "
+" 1 PRs · 1 new · sort: number                                                                                           "
+"  TURN   REPO     # TITLE                                                          AUTHOR SIZE   CI REVIEW   WAIT LAST  "
+" acme/api#1 Land the planner ───────────────────────────────────────────────────────────────────────────────────────────"
+"alice wants to merge fix into main · opened 8d ago · updated 1d ago · +42 -8 in 3 files                                 "
+"Turn: queued for 2d · Last: alice (author) pushed a commit 2d ago · ★ new since you last looked                         "
+"Review: approved · You haven't reviewed                                                                                 "
+"CI: ✓ pass · In the merge queue: position 2, awaiting checks, queued 20m ago, ~15m to go · Labels: bug, auth            "
+"Score: 25 = small +15, waiting 2d +10                                                                                   "
+"https://github.com/acme/api/pull/1                                                                                      "
+"                                                                                                                        "
+"                                                                                                          cached 0m ago "

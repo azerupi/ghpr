@@ -4,9 +4,9 @@ use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
-use super::{Cmp, Filter, LastRole, MineState, Pred, SizeClass, Term, TimeCond, User};
+use super::{Cmp, Filter, LastRole, MergeCond, MineState, Pred, SizeClass, Term, TimeCond, User};
 use crate::glob::Glob;
-use crate::model::{CiState, ReviewDecision, Turn};
+use crate::model::{CiState, MergeState, ReviewDecision, Turn};
 
 /// A `key:value` filter, for the parser's error messages and for completion.
 pub struct KeyInfo {
@@ -46,6 +46,7 @@ pub const KEYS: &[KeyInfo] = &[
     key("team", "requested team", ValueKind::Team),
     key("label", "label name", ValueKind::Label),
     key("ci", "CI status", ValueKind::Enum),
+    key("merge", "merge state, or queued", ValueKind::Enum),
     key("review", "review decision", ValueKind::Enum),
     key("mine", "your own review", ValueKind::Enum),
     key("last", "who acted last", ValueKind::Enum),
@@ -99,6 +100,7 @@ pub fn enum_values(key: &str) -> Option<Vec<(&'static str, &'static str)>> {
         "turn" => names(TURNS),
         "last" => names(LAST),
         "ci" => names(CI),
+        "merge" => names(MERGE),
         "review" => names(REVIEW),
         "mine" => names(MINE),
         _ => return None,
@@ -182,6 +184,7 @@ fn key_value(key: &str, value: &str, tz: &TimeZone) -> Result<Pred, String> {
         "turn" => Pred::Turn(one_of(key, values(), TURNS)?),
         "last" => Pred::Last(one_of(key, values(), LAST)?),
         "ci" => Pred::Ci(one_of(key, values(), CI)?),
+        "merge" => Pred::Merge(one_of(key, values(), MERGE)?),
         "review" => Pred::Review(one_of(key, values(), REVIEW)?),
         "mine" => Pred::Mine(one_of(key, values(), MINE)?),
         "age" => Pred::Age(
@@ -231,6 +234,7 @@ const TURNS: &[(&str, Turn, &str)] = &[
     ("me", Turn::Me, "you need to act"),
     ("team", Turn::Team, "requested from your team"),
     ("merge", Turn::Merge, "approved and green"),
+    ("queued", Turn::Queued, "in the merge queue"),
     ("author", Turn::Author, "waiting on the author"),
     ("reviewers", Turn::Reviewers, "waiting on reviewers"),
     ("blocked", Turn::Blocked, "draft, failing, or conflicting"),
@@ -260,6 +264,39 @@ const REVIEW: &[(&str, Option<ReviewDecision>, &str)] = &[
         "review required",
     ),
     ("none", None, "no review policy"),
+];
+const MERGE: &[(&str, MergeCond, &str)] = &[
+    (
+        "clean",
+        MergeCond::State(MergeState::Clean),
+        "mergeable, checks passing",
+    ),
+    (
+        "unstable",
+        MergeCond::State(MergeState::Unstable),
+        "mergeable, optional checks failing or pending",
+    ),
+    (
+        "behind",
+        MergeCond::State(MergeState::Behind),
+        "needs updating with its base",
+    ),
+    (
+        "blocked",
+        MergeCond::State(MergeState::Blocked),
+        "required reviews or checks missing",
+    ),
+    (
+        "conflict",
+        MergeCond::State(MergeState::Conflict),
+        "merge conflicts",
+    ),
+    (
+        "unknown",
+        MergeCond::State(MergeState::Unknown),
+        "not computed yet",
+    ),
+    ("queued", MergeCond::Queued, "in the merge queue"),
 ];
 const MINE: &[(&str, MineState, &str)] = &[
     ("unreviewed", MineState::Unreviewed, "you haven't reviewed"),

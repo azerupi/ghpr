@@ -14,6 +14,7 @@ use crate::sort::SortKey;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
     Turn,
+    Merge,
     Repo,
     Number,
     Title,
@@ -46,6 +47,7 @@ const COLUMNS: &[(Column, &str, &str, u8, Option<SortKey>)] = &[
         Some(SortKey::Waiting),
     ),
     (Column::Ci, "ci", "CI", 60, Some(SortKey::Ci)),
+    (Column::Merge, "merge", "MERGE", 45, None),
     (
         Column::Review,
         "review",
@@ -126,6 +128,7 @@ impl Column {
     pub fn text(self, pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> String {
         match self {
             Column::Turn => pr.turn.label().to_owned(),
+            Column::Merge => pr.merge_status(),
             Column::Repo => pr.repo.to_string(),
             Column::Number => pr.number.to_string(),
             Column::Title if pr.is_draft => format!("[draft] {}", pr.title),

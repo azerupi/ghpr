@@ -62,7 +62,7 @@ pub fn breakdown(pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> Vec<(String
         Turn::Me => add("your turn".into(), weights.turn_me),
         Turn::Team => add("team's turn".into(), weights.turn_team),
         Turn::Merge => add("ready to merge".into(), weights.turn_merge),
-        Turn::Author | Turn::Reviewers | Turn::Blocked => {}
+        Turn::Queued | Turn::Author | Turn::Reviewers | Turn::Blocked => {}
     }
     if pr.mentions_me {
         add("mentioned".into(), weights.mentioned);

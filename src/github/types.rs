@@ -93,10 +93,26 @@ pub struct RawPr {
     pub head_ref_name: String,
     pub review_decision: Option<String>,
     pub mergeable: String,
+    /// Missing from older fixtures and caches; treated as unknown.
+    #[serde(default)]
+    pub merge_state_status: Option<String>,
+    #[serde(default)]
+    pub is_merge_queue_enabled: bool,
+    #[serde(default)]
+    pub merge_queue_entry: Option<RawQueueEntry>,
     pub author: Option<RawActor>,
     pub repository: RawRepository,
     pub labels: Option<Nodes<RawLabel>>,
     pub commits: Nodes<RawCommitNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawQueueEntry {
+    pub position: u32,
+    pub state: String,
+    pub enqueued_at: Timestamp,
+    pub estimated_time_to_merge: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

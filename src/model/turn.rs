@@ -5,8 +5,8 @@ use jiff::Timestamp;
 use crate::glob::Glob;
 
 use super::{
-    Activity, ActivityKind, CiState, Mergeable, MyReview, ReviewDecision, ReviewState, Reviewer,
-    Role, Turn,
+    Activity, ActivityKind, CiState, MergeState, Mergeable, MyReview, QueueEntry, QueueState,
+    ReviewDecision, ReviewState, Reviewer, Role, Turn,
 };
 
 /// Labels that mean "don't review or merge this yet" (compared case-insensitively).
@@ -85,6 +85,10 @@ pub struct Facts<'a> {
     pub review_decision: Option<ReviewDecision>,
     pub ci: CiState,
     pub mergeable: Mergeable,
+    pub merge_state: MergeState,
+    /// The repo merges through a merge queue.
+    pub queue_enabled: bool,
+    pub queue: Option<QueueEntry>,
     pub requested: &'a [Reviewer],
     pub created_at: Timestamp,
     /// The viewer's submitted reviews, in any order.
@@ -214,17 +218,35 @@ pub fn derive(facts: &Facts, events: &[Event], viewer: &Viewer) -> Derived {
         .iter()
         .any(|l| BLOCKING_LABELS.iter().any(|b| l.eq_ignore_ascii_case(b)));
     let broken = facts.ci == CiState::Fail || facts.mergeable == Mergeable::Conflicting;
-    let mergeable = facts.review_decision == Some(ReviewDecision::Approved)
+    let approved = facts.review_decision == Some(ReviewDecision::Approved);
+    // With a merge queue, GitHub tests the merged result itself, and what it
+    // reports as the merge state for PRs waiting to be queued isn't known
+    // well enough to rely on; those repos go by approval, CI, and conflicts.
+    let gated = !facts.queue_enabled;
+    let mergeable = approved
         && matches!(facts.ci, CiState::Pass | CiState::None)
-        && facts.mergeable == Mergeable::Clean;
+        && facts.mergeable == Mergeable::Clean
+        && !(gated
+            && matches!(
+                facts.merge_state,
+                MergeState::Behind | MergeState::Blocked | MergeState::Conflict
+            ));
+    // Approved, but branch protection wants the branch brought up to date.
+    let behind = approved && gated && facts.merge_state == MergeState::Behind;
+    let queued = facts.queue.filter(|q| q.state != QueueState::Unmergeable);
+    let ejecting = facts.queue.filter(|q| q.state == QueueState::Unmergeable);
     let last_at = last_activity.as_ref().map_or(facts.created_at, |a| a.at);
 
     let (turn, since) = if facts.is_draft || blocking_label {
         (Turn::Blocked, Some(last_at))
     } else if viewer_is_author {
-        if last_side == Some(Side::Reviewer) {
+        if let Some(entry) = queued {
+            (Turn::Queued, Some(entry.enqueued_at))
+        } else if let Some(entry) = ejecting {
+            (Turn::Me, Some(entry.enqueued_at))
+        } else if last_side == Some(Side::Reviewer) {
             (Turn::Me, run_start(Side::Reviewer))
-        } else if broken {
+        } else if broken || behind {
             (Turn::Me, Some(last_at))
         } else if mergeable {
             (Turn::Merge, Some(last_at))
@@ -246,6 +268,10 @@ pub fn derive(facts: &Facts, events: &[Event], viewer: &Viewer) -> Derived {
 
         if let Some(at) = first_new_mention {
             (Turn::Me, Some(at))
+        } else if let Some(entry) = queued {
+            (Turn::Queued, Some(entry.enqueued_at))
+        } else if let Some(entry) = ejecting {
+            (Turn::Author, Some(entry.enqueued_at))
         } else if broken {
             (Turn::Blocked, Some(last_at))
         } else if directly_requested {
@@ -273,6 +299,8 @@ pub fn derive(facts: &Facts, events: &[Event], viewer: &Viewer) -> Derived {
             (turn, since)
         } else if mergeable {
             (Turn::Merge, Some(last_at))
+        } else if behind {
+            (Turn::Author, Some(last_at))
         } else if last_side == Some(Side::Reviewer) {
             (Turn::Author, run_start(Side::Reviewer))
         } else {
@@ -343,6 +371,9 @@ mod tests {
         review_decision: Option<ReviewDecision>,
         ci: CiState,
         mergeable: Mergeable,
+        merge_state: MergeState,
+        queue_enabled: bool,
+        queue: Option<QueueEntry>,
         requested: Vec<Reviewer>,
         my_reviews: Vec<MyReview>,
         events: Vec<Event>,
@@ -358,6 +389,9 @@ mod tests {
                 review_decision: Some(ReviewDecision::ReviewRequired),
                 ci: CiState::Pass,
                 mergeable: Mergeable::Clean,
+                merge_state: MergeState::Unknown,
+                queue_enabled: false,
+                queue: None,
                 requested: Vec::new(),
                 my_reviews: Vec::new(),
                 events: Vec::new(),
@@ -414,6 +448,9 @@ mod tests {
                 review_decision: self.review_decision,
                 ci: self.ci,
                 mergeable: self.mergeable,
+                merge_state: self.merge_state,
+                queue_enabled: self.queue_enabled,
+                queue: self.queue,
                 requested: &self.requested,
                 created_at: t(1, 0),
                 my_reviews: &self.my_reviews,
@@ -703,6 +740,118 @@ mod tests {
             .commit(t(3, 10));
         pr.review_decision = Some(ReviewDecision::Approved);
         assert_eq!(pr.derive().turn, Turn::Merge);
+    }
+
+    // --- Merge state and the merge queue ---
+
+    /// My PR, approved by bob after my last commit.
+    fn my_approved() -> Pr {
+        let mut pr = Pr::by(ME)
+            .commit(t(2, 9))
+            .review("bob", ReviewState::Approved, t(3, 9))
+            .commit(t(3, 10));
+        pr.review_decision = Some(ReviewDecision::Approved);
+        pr
+    }
+
+    fn entry(state: QueueState) -> QueueEntry {
+        QueueEntry {
+            position: 2,
+            state,
+            enqueued_at: t(4, 9),
+            eta_secs: Some(600),
+        }
+    }
+
+    #[test]
+    fn queued_prs_just_wait() {
+        let mut pr = my_approved();
+        pr.queue_enabled = true;
+        pr.queue = Some(entry(QueueState::AwaitingChecks));
+        let d = pr.derive();
+        assert_eq!((d.turn, d.waiting_since), (Turn::Queued, t(4, 9)));
+
+        let mut theirs = Pr::by(AUTHOR).request(AUTHOR, user(ME), t(2, 10));
+        theirs.queue = Some(entry(QueueState::Queued));
+        assert_eq!(
+            theirs.derive().turn,
+            Turn::Queued,
+            "a request to me is moot now"
+        );
+        theirs = theirs.mention("bob", t(4, 10));
+        assert_eq!(theirs.derive().turn, Turn::Me, "but a new mention isn't");
+    }
+
+    #[test]
+    fn about_to_leave_the_queue_is_the_authors_turn() {
+        let mut pr = my_approved();
+        pr.queue = Some(entry(QueueState::Unmergeable));
+        assert_eq!(pr.derive().turn, Turn::Me);
+
+        let mut theirs = Pr::by(AUTHOR).review(ME, ReviewState::Approved, t(3, 9));
+        theirs.queue = Some(entry(QueueState::Unmergeable));
+        assert_eq!(theirs.derive().turn, Turn::Author);
+    }
+
+    #[test]
+    fn behind_and_approved_needs_the_author_unless_a_queue_merges_it() {
+        let mut pr = my_approved();
+        pr.merge_state = MergeState::Behind;
+        let d = pr.derive();
+        assert_eq!((d.turn, d.waiting_since), (Turn::Me, t(3, 10)));
+
+        let mut theirs = Pr::by(AUTHOR).review("bob", ReviewState::Approved, t(3, 9));
+        theirs.review_decision = Some(ReviewDecision::Approved);
+        theirs.merge_state = MergeState::Behind;
+        assert_eq!(theirs.derive().turn, Turn::Author);
+
+        pr.queue_enabled = true;
+        assert_eq!(
+            pr.derive().turn,
+            Turn::Merge,
+            "the queue tests the merged result"
+        );
+        theirs.queue_enabled = true;
+        assert_eq!(theirs.derive().turn, Turn::Merge);
+
+        let mut unapproved = Pr::by(ME).commit(t(2, 9));
+        unapproved.merge_state = MergeState::Behind;
+        assert_eq!(
+            unapproved.derive().turn,
+            Turn::Reviewers,
+            "nothing to update for yet"
+        );
+    }
+
+    #[test]
+    fn blocked_by_branch_protection_isnt_ready_to_merge() {
+        let mut pr = my_approved();
+        pr.merge_state = MergeState::Blocked;
+        assert_eq!(
+            pr.derive().turn,
+            Turn::Reviewers,
+            "say, a second approval is required"
+        );
+        pr.queue_enabled = true;
+        assert_eq!(pr.derive().turn, Turn::Merge, "ready to add to the queue");
+    }
+
+    #[test]
+    fn clean_unstable_and_unknown_keep_the_old_rules() {
+        for state in [MergeState::Clean, MergeState::Unstable, MergeState::Unknown] {
+            let mut pr = my_approved();
+            pr.merge_state = state;
+            assert_eq!(pr.derive().turn, Turn::Merge, "{state:?}");
+            pr.ci = CiState::Fail;
+            assert_eq!(
+                pr.derive().turn,
+                Turn::Me,
+                "{state:?}: failing CI is still mine to fix"
+            );
+        }
+        let mut pr = Pr::by(ME).commit(t(2, 9));
+        pr.merge_state = MergeState::Clean;
+        assert_eq!(pr.derive().turn, Turn::Reviewers, "clean but unapproved");
     }
 
     // --- Waiting-since fallbacks ---

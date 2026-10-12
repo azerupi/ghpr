@@ -116,7 +116,7 @@ repo:org/api  -draft  turn:me  ci:fail  size:<300  waiting:>2d  label:urgent  au
 |---|---|
 | `repo:` / `org:` | glob, e.g. `repo:org/*-service` |
 | `author:` / `reviewer:` / `team:` | login, `@me` |
-| `turn:` | `me`, `team`, `author`, `reviewers`, `merge`, `blocked` |
+| `turn:` | `me`, `team`, `author`, `reviewers`, `merge`, `queued`, `blocked` |
 | `last:` | who acted last: `author`, `reviewer`, `me`, `bot` |
 | `draft` / `-draft` | |
 | `ci:` | `pass`, `fail`, `pending`, `none` |
@@ -356,6 +356,8 @@ src/
 
 8. **Guided setup:** first-run setup, `ghpr config init`, and a re-offer when setup gains questions. *As built:* a ratatui wizard (accounts from `gh auth status --json hosts`, profile names, default profile and `dirs`/`email`, teams, default view, bots, review) with a preview per step: where each profile applies (via `profile::apply` on the draft), teams listed one org at a time so an SSO-protected org only costs its own teams, open requests per team, a live 10-per-search sample of each view, and bot suggestions from the samples. It edits the file with `toml_edit`, so only the keys setup owns change, validates the result with `config::parse_with` for every profile, backs up the old file, and writes atomically. No-profile state moves to the profile of gh's active account, and renamed profiles take their state along; samples become each profile's cache. `setup_version` in the file versus `setup::SETUP_VERSION` decides the re-offer; "don't ask again" is recorded in `<state>/setup-dismissed`.
 
+9. **Merge state and merge queue:** *As built:* the search phase also fetches `mergeStateStatus`, `isMergeQueueEnabled`, and `mergeQueueEntry`. `merge` now also needs the merge state not to be `BEHIND`, `BLOCKED`, or `DIRTY`; an approved PR that's `BEHIND` is the author's turn. Repos with a merge queue skip both rules (the queue tests the merged result, and how GitHub reports PRs waiting to be queued wasn't observable), so they keep the old approval/CI/conflict rule. `UNSTABLE` doesn't relax the failing-CI rule, since repos without required checks report it for PRs whose every check fails. A new turn `queued` covers PRs in the queue; one the queue reports `UNMERGEABLE` is the author's again. A `merge` column, filter key, and template field show `queue N`, `behind`, `blocked`, and so on; the detail pane explains them. Notifications (merged, ejected, ready) are the natural next step.
+
 Milestones 1 and 2 already give a useful `list` command before any TUI work starts.
 
 ---
@@ -368,4 +370,3 @@ Milestones 1 and 2 already give a useful `list` command before any TUI work star
 - **CODEOWNERS awareness:** flag PRs that touch paths you own even when you weren't requested.
 - **Diff preview** in the detail pane (`gh pr diff` piped through `delta`, when installed).
 - **Linked issues / Jira keys** pulled from the title or branch and shown as a column.
-- **Merge queue status** as a column.

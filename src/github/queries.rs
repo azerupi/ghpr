@@ -22,6 +22,9 @@ query SearchPrs($query: String!, $first: Int!, $after: String) {
         headRefName
         reviewDecision
         mergeable
+        mergeStateStatus
+        isMergeQueueEnabled
+        mergeQueueEntry { position state enqueuedAt estimatedTimeToMerge }
         author { login __typename }
         repository { nameWithOwner }
         labels(first: 20) { nodes { name } }

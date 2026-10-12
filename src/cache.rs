@@ -11,7 +11,7 @@ use crate::model::Pr;
 use crate::views::View;
 
 /// Bump when the cached shape changes; older files are then ignored.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Cached {

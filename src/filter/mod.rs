@@ -38,6 +38,7 @@ enum Pred {
     Ci(Vec<CiState>),
     Review(Vec<Option<ReviewDecision>>),
     Mine(Vec<MineState>),
+    Merge(Vec<MergeCond>),
     Age(Vec<TimeCond>),
     Updated(Vec<TimeCond>),
     Waiting(Vec<TimeCond>),
@@ -77,6 +78,13 @@ enum MineState {
     Approved,
     Changes,
     Commented,
+}
+
+/// A `merge:` value: in the merge queue, or a merge state outside it.
+#[derive(Debug, Clone, Copy)]
+enum MergeCond {
+    Queued,
+    State(crate::model::MergeState),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -229,6 +237,10 @@ impl Pred {
                 roles.contains(&role)
             }
             Pred::Ci(states) => states.contains(&pr.ci),
+            Pred::Merge(conds) => conds.iter().any(|cond| match cond {
+                MergeCond::Queued => pr.queue.is_some(),
+                MergeCond::State(state) => pr.queue.is_none() && pr.merge_state == *state,
+            }),
             Pred::Review(decisions) => decisions.contains(&pr.review_decision),
             Pred::Mine(states) => states.iter().any(|state| {
                 let mine = pr.my_review.map(|r| r.state);
@@ -436,6 +448,25 @@ mod tests {
 
     fn matches(text: &str, pr: &Pr) -> bool {
         parse(text).matches(pr, &ctx())
+    }
+
+    #[test]
+    fn merge_state_and_queue() {
+        use crate::model::{MergeState, QueueEntry, QueueState};
+        let mut p = pr(1);
+        p.merge_state = MergeState::Behind;
+        assert!(matches("merge:behind", &p));
+        assert!(matches("merge:clean,behind", &p));
+        assert!(!matches("merge:queued", &p));
+        p.queue = Some(QueueEntry {
+            position: 1,
+            state: QueueState::Queued,
+            enqueued_at: now(),
+            eta_secs: None,
+        });
+        assert!(matches("merge:queued", &p));
+        assert!(!matches("merge:behind", &p), "the queue place comes first");
+        assert!(error("merge:soon").contains("queued"));
     }
 
     #[test]

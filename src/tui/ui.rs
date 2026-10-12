@@ -10,10 +10,11 @@ use super::app::{App, PromptKind, SNOOZES, Tab};
 use crate::columns::{self, Column};
 use crate::filter::Mark;
 use crate::model::{
-    ActivityKind, CiState, Mergeable, Pr, ReviewDecision, ReviewState, Reviewer, Turn,
+    ActivityKind, CiState, MergeState, Mergeable, Pr, QueueState, ReviewDecision, ReviewState,
+    Reviewer, Turn,
 };
 use crate::model::{ScoreWeights, breakdown};
-use crate::output::age;
+use crate::output::{age, span};
 use crate::progress::{STALL_SECS, elapsed};
 use crate::state::{Flags, Snooze};
 
@@ -339,6 +340,7 @@ fn turn_style(turn: Turn) -> Style {
         Turn::Me => Style::new().green().bold(),
         Turn::Team => Style::new().cyan(),
         Turn::Merge => Style::new().magenta(),
+        Turn::Queued => Style::new().light_magenta(),
         Turn::Author => Style::new().yellow(),
         Turn::Reviewers => Style::new().blue(),
         Turn::Blocked => Style::new().dark_gray(),
@@ -472,11 +474,7 @@ fn render_detail(
         ci_symbol(pr.ci),
         Span::raw(format!(" {}", pr.ci.label())),
     ];
-    match pr.mergeable {
-        Mergeable::Conflicting => health.push(" · merge conflicts".red()),
-        Mergeable::Unknown => health.push(dim(" · mergeability unknown".to_owned())),
-        Mergeable::Clean => {}
-    }
+    health.extend(merge_spans(pr, now));
     if !pr.labels.is_empty() {
         health.push(Span::raw(format!(" · Labels: {}", pr.labels.join(", "))));
     }
@@ -497,6 +495,46 @@ fn render_detail(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,
     );
+}
+
+/// The merge queue place, or what stands between the PR and merging.
+fn merge_spans(pr: &Pr, now: Timestamp) -> Vec<Span<'static>> {
+    if let Some(entry) = pr.queue {
+        let mut spans = vec![
+            Span::raw(" · "),
+            "In the merge queue".light_magenta(),
+            Span::raw(format!(
+                ": position {}, {}, queued {} ago",
+                entry.position,
+                entry.state.label(),
+                age(now, entry.enqueued_at)
+            )),
+        ];
+        if entry.state == QueueState::Unmergeable {
+            spans.push(" (about to be removed)".red());
+        } else if let Some(eta) = entry.eta_secs {
+            spans.push(Span::raw(format!(", ~{} to go", span(i64::from(eta)))));
+        }
+        return spans;
+    }
+    let base = &pr.base_ref;
+    match (pr.merge_state, pr.mergeable) {
+        (MergeState::Conflict, _) | (_, Mergeable::Conflicting) => {
+            vec![format!(" · conflicts with {base}").red()]
+        }
+        (MergeState::Behind, _) => vec![format!(" · behind {base}: update the branch").yellow()],
+        (MergeState::Blocked, _) if !pr.is_draft => {
+            vec![" · merging blocked: required reviews or checks missing".dark_gray()]
+        }
+        (MergeState::Unstable, _) => {
+            vec![" · mergeable; optional checks failing or pending".dark_gray()]
+        }
+        (MergeState::Unknown, Mergeable::Unknown) => {
+            vec![" · mergeability unknown".dark_gray()]
+        }
+        _ if pr.queue_enabled => vec![" · merges through a queue".dark_gray()],
+        _ => Vec::new(),
+    }
 }
 
 fn activity_verb(kind: ActivityKind) -> &'static str {
@@ -863,6 +901,33 @@ mod tests {
     #[test]
     fn renders_table_and_detail() {
         insta::assert_snapshot!(draw(&mut sample(), 120, 15));
+    }
+
+    #[test]
+    fn detail_explains_merge_state_and_queue() {
+        use crate::model::{MergeState, QueueEntry, QueueState};
+        let mut queued = pr_titled(1, "Land the planner");
+        queued.turn = Turn::Queued;
+        queued.queue_enabled = true;
+        queued.queue = Some(QueueEntry {
+            position: 2,
+            state: QueueState::AwaitingChecks,
+            enqueued_at: now() - SignedDuration::from_mins(20),
+            eta_secs: Some(15 * 60),
+        });
+        let mut behind = pr_titled(2, "Rename the config keys");
+        behind.merge_state = MergeState::Behind;
+        behind.turn = Turn::Author;
+        for (name, pr) in [("queued", queued), ("behind", behind)] {
+            let mut app = App::new(settings("for-me", false), now()).with_cache(
+                0,
+                vec![pr],
+                "me".into(),
+                now(),
+            );
+            let screen = draw(&mut app, 120, 12);
+            insta::assert_snapshot!(format!("detail_{name}"), screen);
+        }
     }
 
     #[test]
