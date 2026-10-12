@@ -64,7 +64,7 @@ pub enum Command {
     /// Uses the cache while it's fresh (see `refresh_interval`).
     Count(CountArgs),
 
-    /// Inspect the configuration.
+    /// Set up or inspect the configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
 
@@ -111,6 +111,9 @@ pub struct OutputArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
+    /// Set up accounts, profiles, teams, the default view, and bots, step by
+    /// step. Starts from the file's current values and backs it up first.
+    Init,
     /// Print the path of the config file.
     Path,
     /// Load the config file and report any errors.

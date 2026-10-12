@@ -9,7 +9,10 @@ use super::queries;
 use crate::progress::{Progress, Reporter};
 use futures::{StreamExt, TryStreamExt, stream};
 
-use super::types::{GraphQlResponse, NodesData, RawPr, RawPrDetail, SearchData};
+use super::types::{
+    CountData, GraphQlResponse, NodesData, OrgTeamsData, RawPr, RawPrDetail, SearchData,
+    ViewerOrgsData,
+};
 
 const GITHUB_GRAPHQL: &str = "https://api.github.com/graphql";
 const PAGE_SIZE: u32 = 100;
@@ -143,6 +146,38 @@ impl Client {
             .graphql(queries::PR_DETAILS, variables, reporter)
             .await?;
         Ok((requested, data.nodes.into_iter().flatten().collect()))
+    }
+
+    /// The viewer's login and the organizations they belong to.
+    pub async fn viewer_orgs(&self) -> Result<(String, Vec<String>)> {
+        let data: ViewerOrgsData = self
+            .graphql(queries::VIEWER_ORGS, json!({}), &Reporter::none())
+            .await?;
+        let orgs = data.viewer.organizations.nodes;
+        Ok((
+            data.viewer.login,
+            orgs.into_iter().map(|o| o.login).collect(),
+        ))
+    }
+
+    /// Slugs of the teams in `org` that `login` is on.
+    pub async fn org_teams(&self, org: &str, login: &str) -> Result<Vec<String>> {
+        let variables = json!({ "org": org, "login": login });
+        let data: OrgTeamsData = self
+            .graphql(queries::ORG_TEAMS, variables, &Reporter::none())
+            .await?;
+        Ok(data
+            .organization
+            .map(|o| o.teams.nodes.into_iter().map(|t| t.slug).collect())
+            .unwrap_or_default())
+    }
+
+    /// How many PRs match `query`, without fetching them.
+    pub async fn count(&self, query: &str) -> Result<u32> {
+        let data: CountData = self
+            .graphql(queries::COUNT, json!({ "query": query }), &Reporter::none())
+            .await?;
+        Ok(data.search.issue_count)
     }
 
     /// POST the body, retrying dropped connections and gateway errors, which
@@ -298,9 +333,37 @@ mod tests {
         client
     }
 
+    #[tokio::test]
+    async fn counts_and_lists_teams() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                json!({ "variables": { "query": "is:pr" } }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "search": { "issueCount": 7 } }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "variables": { "org": "gone" } })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "organization": null }
+            })))
+            .mount(&server)
+            .await;
+        let client = client(&server).await;
+        assert_eq!(client.count("is:pr").await.unwrap(), 7);
+        assert_eq!(
+            client.org_teams("gone", "me").await.unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
     #[test]
     fn log_helpers() {
         assert_eq!(operation_name(queries::SEARCH_PRS), "SearchPrs");
+        assert_eq!(operation_name(queries::ORG_TEAMS), "OrgTeams");
         assert_eq!(operation_name(queries::PR_DETAILS), "PrDetails");
         let vars = json!({ "ids": ["a", "b"], "login": "me" });
         assert_eq!(summarize(&vars), "ids=[2 items] login=\"me\"");

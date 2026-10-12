@@ -23,6 +23,44 @@ pub struct SearchData {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ViewerOrgsData {
+    pub viewer: RawViewerOrgs,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawViewerOrgs {
+    pub login: String,
+    pub organizations: Nodes<RawOrganization>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrgTeamsData {
+    /// `null` when the organization isn't visible.
+    pub organization: Option<RawOrgTeams>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawOrgTeams {
+    pub teams: Nodes<RawTeam>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawTeam {
+    pub slug: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CountData {
+    pub search: RawCount,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawCount {
+    pub issue_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchConnection {
     pub issue_count: u32,

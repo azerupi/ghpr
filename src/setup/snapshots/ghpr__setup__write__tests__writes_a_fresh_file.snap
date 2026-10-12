@@ -1,0 +1,22 @@
+---
+source: src/setup/write.rs
+expression: text
+---
+# ghpr configuration. Every setting is optional; the README's Configuration
+# and Profiles sections describe them all. `ghpr config init` runs the guided
+# setup again: it keeps your edits and comments, and backs up this file first.
+setup_version = 1
+
+[profiles.personal]
+gh_user = "me"
+default = true
+
+[profiles.personal.team_reviews]
+teams = ["me/team"]
+
+[profiles.work]
+token_env = "WORK_TOKEN"
+dirs = ["~/work", "~/clients"]
+email = "me@work.example"
+default_view = "mine"
+bots = ["jenkins"]

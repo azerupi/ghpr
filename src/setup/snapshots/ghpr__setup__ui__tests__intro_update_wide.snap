@@ -1,0 +1,20 @@
+---
+source: src/setup/ui.rs
+expression: "draw(&mut update, 120, 16)"
+---
+" ghpr setup  Welcome                                                                                                    "
+"Setup has new questions                                ┌ Preview ──────────────────────────────────────────────────────┐"
+"Your config was written before ghpr had a guided       │Setup starts from your current values, and backs up the file   │"
+"setup. New since then:                                 │before writing. Comments, views, and anything else you added   │"
+"  • guided setup: accounts, profiles, teams, default   │stay as they are.                                              │"
+"    view, bots                                         │                                                               │"
+"                                                       │Not now asks again next time. Don't ask again waits for the    │"
+"› Set up now                                           │next setup update. `ghpr config init` runs setup any time.     │"
+"  Not now                                              │                                                               │"
+"  Don't ask again for this version                     │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       └───────────────────────────────────────────────────────────────┘"
+" ↑↓ choose · Enter confirm · Esc not now · Ctrl-C quit                                                                  "

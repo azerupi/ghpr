@@ -2,7 +2,7 @@
 
 mod app;
 mod facets;
-mod input;
+pub(crate) mod input;
 mod ui;
 
 use std::path::PathBuf;

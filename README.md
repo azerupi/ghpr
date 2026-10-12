@@ -27,7 +27,29 @@ cargo install --path .
 
 `ghpr` uses your GitHub CLI login (`gh auth login`), or a token in `GH_TOKEN` /
 `GITHUB_TOKEN`. Only github.com is supported. For separate work and personal
-accounts, see [Profiles](#profiles).
+accounts, see [Setup](#setup) and [Profiles](#profiles).
+
+## Setup
+
+The first time you run `ghpr` without a config file, it offers a short guided
+setup. It lists the accounts gh is logged in to and makes a profile for each,
+then asks where each profile applies (directories, a repo's git `user.email`),
+whose team review requests to include, which view to open with, and which
+accounts are bots. Every question previews its effect: where each profile
+would apply, your teams with how many PRs wait on each, a live sample of the
+highlighted view. Nothing is written until you confirm; *Skip* writes a short
+starter config instead.
+
+`ghpr config init` runs setup again any time (`--config` picks another file).
+It starts from your current values, changes only the keys it asks about
+(comments, views, and everything else stay as they are), and backs the file up
+first, next to it (`config.toml.bak-<time>`). Seen/snoozed/muted state moves
+along when a profile is added or renamed.
+
+When an update adds new setup questions, `ghpr` offers setup again and lists
+what's new; *Don't ask again* waits for the next update. Setup only ever comes
+up in a terminal: `list`, `count`, `paths`, `--config`, and `--offline` never
+prompt.
 
 ## Whose turn is it?
 
@@ -150,8 +172,8 @@ echo 'COMPLETE=fish ghpr | source' > ~/.config/fish/completions/ghpr.fish  # fis
 
 `ghpr config path` shows where the file lives (usually
 `~/.config/ghpr/config.toml`); `ghpr config check` validates it and shows the
-profile in effect. Everything is
-optional:
+profile in effect; `ghpr config init` runs the [guided setup](#setup).
+Everything is optional:
 
 ```toml
 default_view = "for-me"
@@ -197,7 +219,8 @@ always stays.
 
 Profiles keep separate accounts apart, say work and personal: each has its own
 token, settings, cache, and seen/snoozed/muted state, so switching between them
-never overwrites the other's.
+never overwrites the other's. [Setup](#setup) writes them for you; this is what
+it writes.
 
 ```toml
 [profiles.work]

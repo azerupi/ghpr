@@ -1,0 +1,22 @@
+---
+source: src/setup/ui.rs
+expression: "draw(&mut w, 120, 18)"
+---
+" ghpr setup  4/7 Team reviews · work                                                                                    "
+"Whose team review requests should work show?           ┌ Preview ──────────────────────────────────────────────────────┐"
+"Requests to these teams show up in for-me as turn      │⠋ Listing your teams…                                          │"
+"`team`.                                                │                                                               │"
+"                                                       │Turn `team` ranks below requests to you; `count_as_mine = true`│"
+"› [x] acme/old                                         │under [team_reviews] makes them yours.                         │"
+"  Others (org/team, …):                                │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       └───────────────────────────────────────────────────────────────┘"
+" ↑↓ move · Space toggle · Tab type others · Enter next · Esc back · Ctrl-C cancel                                       "

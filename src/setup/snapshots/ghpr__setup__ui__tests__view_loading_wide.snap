@@ -1,0 +1,22 @@
+---
+source: src/setup/ui.rs
+expression: "draw(&mut w, 120, 18)"
+---
+" ghpr setup  5/7 Default view · work                                                                                    "
+"Which view should work open with?                      ┌ Preview ──────────────────────────────────────────────────────┐"
+"The others are a tab away ([ and ]).                   │for-me ⠋ fetching a sample…                                    │"
+"                                                       │review requests, your PRs, and PRs you reviewed or were        │"
+"› for-me · what needs you                              │mentioned in when it's your turn, + 1 team                     │"
+"  mine · your PRs                                      │                                                               │"
+"  repo · the current repo                              │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       └───────────────────────────────────────────────────────────────┘"
+" ↑↓ choose · Enter next · Esc back · Ctrl-C cancel                                                                      "

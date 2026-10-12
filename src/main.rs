@@ -15,6 +15,7 @@ mod model;
 mod output;
 mod profile;
 mod progress;
+mod setup;
 mod sort;
 mod state;
 #[cfg(test)]
@@ -74,7 +75,7 @@ async fn main() -> Result<()> {
     let result = match cli.command {
         Some(Command::List(args)) => list(&cli.global, args).await,
         Some(Command::Count(args)) => count(&cli.global, args).await,
-        Some(Command::Config(command)) => config_command(&cli.global, command),
+        Some(Command::Config(command)) => config_command(&cli.global, command).await,
         Some(Command::Paths) => paths(&cli.global),
         None => interactive(&cli.global, cli.view.as_deref()).await,
     };
@@ -153,6 +154,10 @@ fn load_state(
 }
 
 async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
+    // First run, or a config from before setup's latest questions.
+    if setup::maybe_prompt(global).await? == setup::Proceed::Quit {
+        return Ok(());
+    }
     let setup = setup(global, view)?;
     let now = jiff::Timestamp::now();
     let profile = profile_name(&setup.config).map(str::to_owned);
@@ -421,15 +426,14 @@ fn paths(global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-fn config_command(global: &GlobalArgs, command: ConfigCommand) -> Result<()> {
+async fn config_command(global: &GlobalArgs, command: ConfigCommand) -> Result<()> {
+    let path = match &global.config {
+        Some(path) => path.clone(),
+        None => config::default_path()?,
+    };
     match command {
-        ConfigCommand::Path => {
-            let path = match &global.config {
-                Some(path) => path.clone(),
-                None => config::default_path()?,
-            };
-            out!("{}", path.display());
-        }
+        ConfigCommand::Init => setup::init(&path).await?,
+        ConfigCommand::Path => out!("{}", path.display()),
         ConfigCommand::Check => {
             let config = load_config(global)?;
             out!("config OK ({} custom views)", config.views.len());

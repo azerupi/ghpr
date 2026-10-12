@@ -1,0 +1,20 @@
+---
+source: src/setup/ui.rs
+expression: "draw(&mut w, 120, 16)"
+---
+" ghpr setup  3/7 When to use it · work                                                                                  "
+"Which git user.email is work for? (optional)           ┌ Preview ──────────────────────────────────────────────────────┐"
+"Repos whose git user.email matches use work, wherever  │Where each profile applies:                                    │"
+"they are.                                              │  here (~/code/ghpr) → personal (default)                      │"
+"                                                       │  repos with user.email me@work.example → work (git user.email │"
+"› me@work.example                                      │  me@work.example)                                             │"
+"                                                       │  anywhere else → personal (default)                           │"
+"                                                       │                                                               │"
+"                                                       │First match wins: --profile, git config ghpr.profile,          │"
+"                                                       │directories (longest), email, then the default.                │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       └───────────────────────────────────────────────────────────────┘"
+" Enter next · Esc back · Ctrl-C cancel                                                                                  "

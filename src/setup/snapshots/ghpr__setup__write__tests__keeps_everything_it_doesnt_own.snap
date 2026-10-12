@@ -1,0 +1,32 @@
+---
+source: src/setup/write.rs
+expression: text
+---
+# my ghpr config
+refresh_interval = "2m"
+setup_version = 1
+
+[team_reviews]
+count_as_mine = true
+
+[score]
+turn_me = 200 # really, me first
+
+[views.backend]
+query = "is:open org:acme label:backend"
+
+[profiles.personal]
+gh_user = "me"
+default = true
+default_view = "backend"
+bots = ["ci-user"]
+
+[profiles.personal.team_reviews]
+teams = ["acme/platform"]
+
+[profiles.work]
+gh_user = "me-work"
+dirs = ["~/work"]
+
+[profiles.work.team_reviews]
+teams = ["acme/robotics"]

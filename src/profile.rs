@@ -208,7 +208,7 @@ fn by_default(tables: &Tables) -> Result<Option<(String, String)>> {
     }
 }
 
-fn expand_home(dir: &str, home: Option<&Path>) -> PathBuf {
+pub(crate) fn expand_home(dir: &str, home: Option<&Path>) -> PathBuf {
     match (
         dir.strip_prefix("~/")
             .or(dir.strip_prefix("~").filter(|r| r.is_empty())),

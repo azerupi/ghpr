@@ -1,0 +1,22 @@
+---
+source: src/setup/ui.rs
+expression: "draw(&mut w, 120, 18)"
+---
+" ghpr setup  4/7 Team reviews · work                                                                                    "
+"Whose team review requests should work show?           ┌ Preview ──────────────────────────────────────────────────────┐"
+"Requests to these teams show up in for-me as turn      │Couldn't list your teams: Your token has not been granted the  │"
+"`team`.                                                │required scopes                                                │"
+"                                                       │Type them under Others as ORG/TEAM-SLUG, comma-separated.      │"
+"  [x] acme/old                                         │                                                               │"
+"› Others (org/team, …):                                │Turn `team` ranks below requests to you; `count_as_mine = true`│"
+"                                                       │under [team_reviews] makes them yours.                         │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       │                                                               │"
+"                                                       └───────────────────────────────────────────────────────────────┘"
+" typing · ↑ back to the list · Enter next · Esc back · Ctrl-C cancel                                                    "

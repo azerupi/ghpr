@@ -13,6 +13,9 @@ use crate::profile::{self, Profile, Whereabouts};
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// The guided setup version this file was written by; missing means 0
+    /// (written before guided setup existed, or by hand).
+    pub setup_version: Option<u32>,
     /// View used when none is given on the command line.
     pub default_view: Option<String>,
     /// How often the UI refreshes in the background, e.g. `5m` or `90s`.
@@ -34,6 +37,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            setup_version: None,
             default_view: None,
             refresh_interval: SignedDuration::from_mins(5),
             views: BTreeMap::new(),
@@ -164,7 +168,7 @@ fn parse(text: &str) -> Result<Config> {
     parse_with(text, &Whereabouts::default())
 }
 
-fn parse_with(text: &str, here: &Whereabouts) -> Result<Config> {
+pub(crate) fn parse_with(text: &str, here: &Whereabouts) -> Result<Config> {
     let mut table: toml::Table = toml::from_str(text)?;
     let profile = profile::apply(&mut table, here)?;
     let mut config: Config = toml::Value::Table(table).try_into()?;

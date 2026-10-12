@@ -80,3 +80,27 @@ fragment Reviewer on RequestedReviewer {
   ... on Team { slug organization { login } }
 }
 "#;
+
+/// The viewer's organizations, for listing their teams during setup.
+pub const VIEWER_ORGS: &str = r#"
+query ViewerOrgs {
+  viewer { login organizations(first: 100) { nodes { login } } }
+}
+"#;
+
+/// The teams in one organization that `$login` is on. One request per
+/// organization, so one that refuses (SAML SSO, say) doesn't hide the rest.
+pub const ORG_TEAMS: &str = r#"
+query OrgTeams($org: String!, $login: String!) {
+  organization(login: $org) {
+    teams(first: 100, userLogins: [$login]) { nodes { slug } }
+  }
+}
+"#;
+
+/// How many issues or PRs match a search, without fetching any.
+pub const COUNT: &str = r#"
+query Count($query: String!) {
+  search(type: ISSUE, query: $query, first: 0) { issueCount }
+}
+"#;
