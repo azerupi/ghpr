@@ -76,6 +76,9 @@ pub struct Tab {
     pub from_cache: bool,
     pub refreshing: bool,
     pub truncated: bool,
+    /// GitHub's search looked broken on the last refresh, so these are older
+    /// results kept in place of an empty view.
+    pub search_broken: bool,
     pub error: Option<String>,
     /// PR ids marked with `v`; actions apply to all of them.
     pub marked: BTreeSet<String>,
@@ -99,6 +102,7 @@ impl Tab {
             from_cache: false,
             refreshing: false,
             truncated: false,
+            search_broken: false,
             error: None,
             marked: BTreeSet::new(),
             progress: None,
@@ -195,6 +199,9 @@ pub struct FetchedData {
     pub prs: Vec<Pr>,
     pub viewer: String,
     pub truncated: bool,
+    /// `prs` are older results kept because search looked broken; `at` is
+    /// when they were fetched.
+    pub stale: bool,
     pub at: Timestamp,
 }
 
@@ -340,11 +347,15 @@ impl App {
                 t.progress = None;
                 match result {
                     Ok(data) => {
-                        self.state.touch(&data.prs, data.at);
+                        // Stale results say nothing about which PRs are around now.
+                        if !data.stale {
+                            self.state.touch(&data.prs, data.at);
+                        }
                         t.all = data.prs;
                         t.fetched_at = Some(data.at);
                         t.from_cache = false;
                         t.truncated = data.truncated;
+                        t.search_broken = data.stale;
                         t.error = None;
                         self.viewer = data.viewer;
                         self.recompute(tab);
@@ -1037,6 +1048,7 @@ pub mod tests {
                 prs,
                 viewer: "me".into(),
                 truncated: false,
+                stale: false,
                 at: now(),
             }),
         }
@@ -1149,6 +1161,33 @@ pub mod tests {
         assert_eq!(app.tab().error.as_deref(), Some("network down"));
         assert!(app.tab().from_cache);
         assert_eq!(app.update(char('r')), [Cmd::Fetch(0)], "manual retry");
+    }
+
+    #[test]
+    fn stale_fetch_is_marked_until_a_good_one() {
+        let mut app = app_with(0);
+        app.init();
+        let earlier = now() - SignedDuration::from_hours(2);
+        app.update(Msg::Fetched {
+            tab: 0,
+            result: Ok(FetchedData {
+                prs: [1, 2].into_iter().map(pr).collect(),
+                viewer: "me".into(),
+                truncated: false,
+                stale: true,
+                at: earlier,
+            }),
+        });
+        assert_eq!(app.tab().prs.len(), 2);
+        assert!(app.tab().search_broken);
+        assert_eq!(app.tab().fetched_at, Some(earlier), "shows the real age");
+
+        app.update(fetched(vec![]));
+        assert!(
+            app.tab().prs.is_empty(),
+            "a believed empty result empties the view"
+        );
+        assert!(!app.tab().search_broken);
     }
 
     #[test]

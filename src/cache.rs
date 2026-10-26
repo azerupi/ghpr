@@ -13,13 +13,30 @@ use crate::views::View;
 /// Bump when the cached shape changes; older files are then ignored.
 const VERSION: u32 = 4;
 
-#[derive(Debug, Serialize, Deserialize)]
+/// How long cached results may stand in for searches that look broken (see
+/// [`crate::fetch::fetch`]). Past this an empty result is believed, so a repo
+/// that was deleted or lost access to can't keep its PRs on screen forever.
+const FALLBACK_FOR: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cached {
     version: u32,
     pub fetched_at: Timestamp,
     /// Whose perspective the PRs were computed from.
     pub viewer: String,
     pub prs: Vec<Pr>,
+}
+
+impl Cached {
+    #[cfg(test)]
+    pub fn new(prs: Vec<Pr>, viewer: String, fetched_at: Timestamp) -> Self {
+        Cached {
+            version: VERSION,
+            fetched_at,
+            viewer,
+            prs,
+        }
+    }
 }
 
 /// Profiles each get their own subdirectory, so switching between them never
@@ -71,6 +88,11 @@ pub fn load(path: &Path) -> Option<Cached> {
     };
     tracing::debug!(path = %path.display(), prs = cached.prs.len(), fetched_at = %cached.fetched_at, "loaded cache");
     Some(cached)
+}
+
+/// The cached result to fall back on if a refresh's searches look broken.
+pub fn fallback(path: Option<&Path>, now: Timestamp) -> Option<Cached> {
+    load(path?).filter(|c| now.duration_since(c.fetched_at) < FALLBACK_FOR)
 }
 
 pub fn save(path: &Path, prs: &[Pr], viewer: &str, fetched_at: Timestamp) -> Result<()> {

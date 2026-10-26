@@ -599,6 +599,8 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(format!(" {error}").red())
     } else if let Some((text, _)) = &app.flash {
         Line::from(format!(" {text}"))
+    } else if tab.search_broken {
+        Line::from(" GitHub search returned nothing; showing earlier results".yellow())
     } else if tab.truncated {
         Line::from(" some searches hit the result limit".yellow())
     } else {
@@ -611,8 +613,12 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         right.push("offline · ".yellow());
     }
     if let Some(at) = tab.fetched_at {
-        let label = if tab.from_cache { "cached" } else { "updated" };
-        right.push(format!("{label} {} ago", age(app.now, at)).dark_gray());
+        if tab.search_broken {
+            right.push(format!("stale · updated {} ago", age(app.now, at)).yellow());
+        } else {
+            let label = if tab.from_cache { "cached" } else { "updated" };
+            right.push(format!("{label} {} ago", age(app.now, at)).dark_gray());
+        }
     }
     if tab.refreshing {
         right.extend(refresh_status(tab, app.now));

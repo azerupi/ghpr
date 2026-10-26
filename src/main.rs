@@ -254,8 +254,21 @@ async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {
         (cached.prs, cached.viewer, Vec::new())
     } else {
         let client = github::Client::new(auth::token(setup.config.profile.as_ref())?)?;
-        let fetched = fetch_with_progress(&client, &setup.view, setup.viewer, args.limit).await?;
-        if let Some(path) = &setup.cache_path
+        let previous = cache::fallback(setup.cache_path.as_deref(), jiff::Timestamp::now());
+        let fetched = fetch_with_progress(
+            &client,
+            &setup.view,
+            setup.viewer,
+            previous.as_ref(),
+            args.limit,
+        )
+        .await?;
+        if let Some(at) = fetched.stale_since {
+            eprintln!(
+                "warning: GitHub search returned nothing (it looks broken); showing results from {} ago",
+                output::age(jiff::Timestamp::now(), at)
+            );
+        } else if let Some(path) = &setup.cache_path
             && let Err(e) = cache::save(path, &fetched.prs, &fetched.viewer, jiff::Timestamp::now())
         {
             eprintln!("warning: could not save cache: {e:#}");
@@ -304,10 +317,11 @@ async fn fetch_with_progress(
     client: &github::Client,
     view: &View,
     viewer: Viewer,
+    previous: Option<&cache::Cached>,
     limit: u32,
 ) -> Result<fetch::Fetched> {
     if !std::io::stderr().is_terminal() {
-        return fetch::fetch(client, view, viewer, limit, &Reporter::none()).await;
+        return fetch::fetch(client, view, viewer, previous, limit, &Reporter::none()).await;
     }
 
     // The latest step and when it happened; redrawn on every step and every
@@ -338,7 +352,7 @@ async fn fetch_with_progress(
         })
     };
 
-    let fetching = fetch::fetch(client, view, viewer, limit, &reporter);
+    let fetching = fetch::fetch(client, view, viewer, previous, limit, &reporter);
     tokio::pin!(fetching);
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
     let result = loop {
@@ -374,8 +388,18 @@ async fn count(global: &GlobalArgs, args: CountArgs) -> Result<()> {
         }
         _ => {
             let client = github::Client::new(auth::token(setup.config.profile.as_ref())?)?;
-            let fetched = fetch_with_progress(&client, &setup.view, setup.viewer, UI_LIMIT).await?;
-            if let Some(path) = &setup.cache_path {
+            let previous = cache::fallback(setup.cache_path.as_deref(), now);
+            let fetched = fetch_with_progress(
+                &client,
+                &setup.view,
+                setup.viewer,
+                previous.as_ref(),
+                UI_LIMIT,
+            )
+            .await?;
+            if let Some(path) = &setup.cache_path
+                && fetched.stale_since.is_none()
+            {
                 let _ = cache::save(path, &fetched.prs, &fetched.viewer, now);
             }
             (fetched.prs, fetched.viewer)

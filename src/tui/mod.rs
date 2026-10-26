@@ -143,17 +143,23 @@ async fn fetch_view(
     reporter: &Reporter,
 ) -> Result<FetchedData, String> {
     let tab = &source.tabs[tab];
+    let previous = cache::fallback(tab.cache_path.as_deref(), jiff::Timestamp::now());
     let fetched = fetch::fetch(
         client,
         &tab.view,
         source.viewer.clone(),
+        previous.as_ref(),
         source.limit,
         reporter,
     )
     .await
     .map_err(|e| format!("refresh failed: {e:#}"))?;
-    let at = jiff::Timestamp::now();
-    if let Some(path) = &tab.cache_path {
+    let at = fetched.stale_since.unwrap_or_else(jiff::Timestamp::now);
+    // Stale results are already what's cached; keeping their time stops them
+    // standing in for longer than the fallback allows.
+    if let Some(path) = &tab.cache_path
+        && fetched.stale_since.is_none()
+    {
         // A cache write failure only costs a slower next start; not worth an error.
         let _ = cache::save(path, &fetched.prs, &fetched.viewer, at);
     }
@@ -161,6 +167,7 @@ async fn fetch_view(
         prs: fetched.prs,
         viewer: fetched.viewer,
         truncated: !fetched.truncated.is_empty(),
+        stale: fetched.stale_since.is_some(),
         at,
     })
 }

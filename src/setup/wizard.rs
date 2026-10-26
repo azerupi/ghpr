@@ -1072,6 +1072,7 @@ pub(super) mod tests {
             prs,
             viewer: "me".into(),
             truncated: Vec::new(),
+            stale_since: None,
         };
         Box::new(Sample::new(view, fetched, &ScoreWeights::default(), now()))
     }

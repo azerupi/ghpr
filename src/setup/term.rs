@@ -109,19 +109,24 @@ fn spawn(
                     weights,
                 } = *request;
                 let result = match client {
-                    Ok(client) => {
-                        fetch::fetch(&client, &view, viewer, SAMPLE_LIMIT, &Reporter::none())
-                            .await
-                            .map(|fetched| {
-                                Box::new(Sample::new(
-                                    view.clone(),
-                                    fetched,
-                                    &weights,
-                                    jiff::Timestamp::now(),
-                                ))
-                            })
-                            .map_err(|e| format!("{e:#}"))
-                    }
+                    Ok(client) => fetch::fetch(
+                        &client,
+                        &view,
+                        viewer,
+                        None,
+                        SAMPLE_LIMIT,
+                        &Reporter::none(),
+                    )
+                    .await
+                    .map(|fetched| {
+                        Box::new(Sample::new(
+                            view.clone(),
+                            fetched,
+                            &weights,
+                            jiff::Timestamp::now(),
+                        ))
+                    })
+                    .map_err(|e| format!("{e:#}")),
                     Err(e) => Err(e),
                 };
                 Data::Sample {
