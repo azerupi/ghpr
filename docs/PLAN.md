@@ -362,6 +362,8 @@ src/
 
 11. **Forks:** *As built:* the `repo` view resolves the checkout's repos like gh does, without network: the remote with `gh-resolved` (`gh repo set-default`; `base`, or `OWNER/REPO` from older gh), else `upstream`, `github`, `origin`, else any GitHub remote; `origin` is added when it's a different repo. Both go into one search (`repo:` qualifiers OR together), upstream first. A fork cloned without an upstream remote still shows only itself; asking GitHub for `repository.parent` would cover that, at a request per start.
 
+12. **Org view:** *As built:* a built-in `org` view searches `org:OWNER` for the base repo's owner (in a fork, the upstream's organization rather than your own account, which would pull in all your personal repos), or for the owners of `-R` repos (several `org:` qualifiers OR together). Same filter and sort as `repo`; left out of the tabs outside a checkout, like `repo`.
+
 Milestones 1 and 2 already give a useful `list` command before any TUI work starts.
 
 ---

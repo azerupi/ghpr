@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::model::RepoName;
 
 const DEFAULT_VIEW: &str = "for-me";
-const BUILTIN_VIEWS: &[&str] = &["for-me", "mine", "repo"];
+const BUILTIN_VIEWS: &[&str] = &["for-me", "mine", "repo", "org"];
 const OPEN_PRS: &[&str] = &["is:pr", "is:open", "archived:false"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +130,36 @@ pub fn resolve(
                 "waiting",
             )
         }
+        "org" => {
+            // The base repo's owner: in a fork, that's the upstream's
+            // organization, not your own account with all your other repos.
+            let owners: Vec<String> = if repos.is_empty() {
+                match current_repos().into_iter().next() {
+                    Some(repo) => vec![repo.owner],
+                    None => bail!("not inside a GitHub repository; pass one with -R OWNER/REPO"),
+                }
+            } else {
+                let mut owners: Vec<String> = Vec::new();
+                for repo in repos {
+                    if !owners.contains(&repo.owner) {
+                        owners.push(repo.owner.clone());
+                    }
+                }
+                owners
+            };
+            let mut query = format!("{open} sort:updated-desc");
+            for owner in &owners {
+                query.push_str(&format!(" org:{owner}"));
+            }
+            (
+                vec![Search {
+                    query,
+                    keep: Keep::All,
+                }],
+                "-draft",
+                "waiting",
+            )
+        }
         _ => {
             let mut available: Vec<&str> = BUILTIN_VIEWS.to_vec();
             available.extend(config.views.keys().map(String::as_str));
@@ -186,7 +216,7 @@ mod tests {
                 },
             );
         }
-        assert_eq!(names(&config), ["for-me", "mine", "repo", "backend"]);
+        assert_eq!(names(&config), ["for-me", "mine", "repo", "org", "backend"]);
     }
 
     #[test]
@@ -236,6 +266,33 @@ mod tests {
             queries(&view),
             ["is:pr is:open archived:false sort:updated-desc repo:o/r"]
         );
+    }
+
+    #[test]
+    fn org_view_covers_the_base_repos_owner() {
+        let here = || vec![repo("ros2-rust/ros2_rust"), repo("me/ros2_rust")];
+        let view = resolve(Some("org"), &[], &Config::default(), here).unwrap();
+        assert_eq!(
+            queries(&view),
+            ["is:pr is:open archived:false sort:updated-desc org:ros2-rust"],
+            "not the fork's owner"
+        );
+        assert_eq!(
+            (view.filter.as_str(), view.sort.as_str()),
+            ("-draft", "waiting")
+        );
+
+        let given = [repo("acme/api"), repo("acme/web"), repo("other/x")];
+        let view = resolve(Some("org"), &given, &Config::default(), || {
+            panic!("should not look up the current repo")
+        })
+        .unwrap();
+        assert_eq!(
+            queries(&view),
+            ["is:pr is:open archived:false sort:updated-desc org:acme org:other"]
+        );
+        let err = resolve(Some("org"), &[], &Config::default(), no_repo).unwrap_err();
+        assert!(err.to_string().contains("-R"), "{err}");
     }
 
     #[test]

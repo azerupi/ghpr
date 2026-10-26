@@ -316,6 +316,7 @@ fn select_items(w: &Wizard) -> Vec<Line<'static>> {
                         "for-me" => " · what needs you",
                         "mine" => " · your PRs",
                         "repo" => " · the current repo",
+                        "org" => " · its organization",
                         _ => "",
                     };
                     Line::from(vec![Span::raw(name), note.dark_gray()])
@@ -808,10 +809,12 @@ fn view_preview(w: &Wizard, i: usize, out: &mut Out) {
         crate::views::resolve(Some(name), &[], config, || repo).ok()
     });
     let Some(view) = view else {
-        out.text(
-            "Opens the repo of the directory you run ghpr in; you're not in one now.",
-            Style::new(),
-        );
+        let what = if name == "org" {
+            "Opens the organization of the repo you run ghpr in"
+        } else {
+            "Opens the repo of the directory you run ghpr in"
+        };
+        out.text(format!("{what}; you're not in one now."), Style::new());
         return;
     };
     let about = describe(&view, if name == "for-me" { teams } else { 0 });

@@ -14,7 +14,7 @@ pub struct Cli {
     #[command(flatten)]
     pub global: GlobalArgs,
 
-    /// View to open (built-in: for-me, mine, repo; or one defined in the config).
+    /// View to open (built-in: for-me, mine, repo, org; or one defined in the config).
     #[arg(add = ArgValueCandidates::new(completion::views))]
     pub view: Option<String>,
 
@@ -81,7 +81,7 @@ pub struct CountArgs {
 
 #[derive(Debug, Args)]
 pub struct ListArgs {
-    /// View to list (built-in: for-me, mine, repo; or one defined in the config).
+    /// View to list (built-in: for-me, mine, repo, org; or one defined in the config).
     #[arg(add = ArgValueCandidates::new(completion::views))]
     pub view: Option<String>,
 

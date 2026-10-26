@@ -243,6 +243,14 @@ pub fn describe(view: &View, teams: usize) -> String {
                 .collect();
             format!("open PRs in {}", repos.join(", "))
         }
+        "org" if view.searches.len() == 1 && view.searches[0].query.contains(" org:") => {
+            let owners: Vec<&str> = view.searches[0]
+                .query
+                .split_whitespace()
+                .filter_map(|t| t.strip_prefix("org:"))
+                .collect();
+            format!("open PRs in every repo of {}", owners.join(", "))
+        }
         _ => format!(
             "search: {}",
             view.searches
@@ -371,5 +379,6 @@ mod tests {
         );
         assert_eq!(describe(&view("mine"), 0), "your open PRs");
         assert_eq!(describe(&view("repo"), 0), "open PRs in o/r");
+        assert_eq!(describe(&view("org"), 0), "open PRs in every repo of o");
     }
 }

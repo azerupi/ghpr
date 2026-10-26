@@ -85,6 +85,7 @@ those only when it's your turn again.
 | `for-me` (default) | Review requests for you (and your teams), your own PRs, and PRs you reviewed or were mentioned in when it's your turn. Sorted by score. |
 | `mine` | Your open PRs. |
 | `repo` | Open PRs in the current checkout's GitHub repo, or the ones given with `-R`. In a fork, also its upstream (see below). |
+| `org` | Open PRs in every repo of the current checkout's organization (in a fork, the upstream's), or of the owners of the repos given with `-R`. |
 
 In a fork, PRs mostly go to the upstream repo, so `repo` searches it along
 with the fork. The upstream is found the way `gh` finds it: the remote
