@@ -190,13 +190,15 @@ impl Client {
         Ok(data.search.issue_count)
     }
 
-    /// POST the body, retrying dropped connections and gateway errors, which
-    /// flaky networks (and GitHub under load) produce now and then.
+    /// POST the body and read the response, retrying dropped connections,
+    /// gateway errors, and successful responses whose body is empty or cut
+    /// off, all of which flaky networks (and GitHub under load) produce now
+    /// and then.
     async fn send(
         &self,
         body: &serde_json::Value,
         reporter: &Reporter,
-    ) -> Result<reqwest::Response> {
+    ) -> Result<(StatusCode, String)> {
         let operation = operation_name(body["query"].as_str().unwrap_or(""));
         let mut delay = self.retry_delay;
         for attempt in 1.. {
@@ -230,20 +232,52 @@ impl Client {
                     "request failed"
                 ),
             }
-            let reason = match &result {
+            let (reason, error) = match result {
                 Ok(response) => match response.status() {
+                    // Out of retries: `graphql` reports it with GitHub's message.
                     status @ (StatusCode::BAD_GATEWAY
                     | StatusCode::SERVICE_UNAVAILABLE
-                    | StatusCode::GATEWAY_TIMEOUT) => Some(format!("GitHub returned {status}")),
-                    _ => None,
+                    | StatusCode::GATEWAY_TIMEOUT)
+                        if attempt >= MAX_ATTEMPTS =>
+                    {
+                        return Ok((status, response.text().await.unwrap_or_default()));
+                    }
+                    status @ (StatusCode::BAD_GATEWAY
+                    | StatusCode::SERVICE_UNAVAILABLE
+                    | StatusCode::GATEWAY_TIMEOUT) => (
+                        format!("GitHub returned {status}"),
+                        eyre!("GitHub returned {status}"),
+                    ),
+                    status if status.is_success() => match response.text().await {
+                        Ok(text) if text.trim().is_empty() => (
+                            "GitHub sent an empty response".to_owned(),
+                            eyre!("GitHub sent an empty response"),
+                        ),
+                        // Valid JSON of the wrong shape isn't worth retrying;
+                        // `graphql` reports it.
+                        Ok(text) => match serde_json::from_str::<serde::de::IgnoredAny>(&text) {
+                            Ok(_) => return Ok((status, text)),
+                            Err(e) => (
+                                "GitHub sent an incomplete response".to_owned(),
+                                eyre!(e).wrap_err("could not parse GitHub response"),
+                            ),
+                        },
+                        Err(e) => (
+                            "response was cut off".to_owned(),
+                            eyre!(e).wrap_err("could not read GitHub response"),
+                        ),
+                    },
+                    status => return Ok((status, response.text().await.unwrap_or_default())),
                 },
-                Err(e) if e.is_timeout() => Some("request timed out".to_owned()),
-                Err(e) if e.is_connect() || e.is_request() => Some("connection failed".to_owned()),
-                Err(_) => None,
+                Err(e) if e.is_timeout() => ("request timed out".to_owned(), eyre!(e)),
+                Err(e) if e.is_connect() || e.is_request() => {
+                    ("connection failed".to_owned(), eyre!(e))
+                }
+                Err(e) => return Err(eyre!(e).wrap_err("request to GitHub failed")),
             };
-            let Some(reason) = reason.filter(|_| attempt < MAX_ATTEMPTS) else {
-                return result.wrap_err("request to GitHub failed");
-            };
+            if attempt >= MAX_ATTEMPTS {
+                return Err(error.wrap_err("request to GitHub failed"));
+            }
             tracing::warn!(operation, attempt, %reason, delay_ms = delay.as_millis() as u64, "retrying");
             reporter.report(Progress::Retrying {
                 attempt: attempt + 1,
@@ -263,23 +297,19 @@ impl Client {
         reporter: &Reporter,
     ) -> Result<T> {
         let body = json!({ "query": query, "variables": variables });
-        let response = self.send(&body, reporter).await?;
+        let (status, text) = self.send(&body, reporter).await?;
 
-        let status = response.status();
         if status == StatusCode::UNAUTHORIZED {
             tracing::error!("token rejected (401)");
             bail!("GitHub rejected the token (401). Run `gh auth login` or set GH_TOKEN.");
         }
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            tracing::error!(status = status.as_u16(), body = %body.trim(), "request failed");
-            bail!("GitHub returned {status}: {}", body.trim());
+            tracing::error!(status = status.as_u16(), body = %text.trim(), "request failed");
+            bail!("GitHub returned {status}: {}", text.trim());
         }
 
-        let body: GraphQlResponse<T> = response
-            .json()
-            .await
-            .wrap_err("could not parse GitHub response")?;
+        let body: GraphQlResponse<T> =
+            serde_json::from_str(&text).wrap_err("could not parse GitHub response")?;
 
         if !body.errors.is_empty() {
             let messages: Vec<_> = body.errors.iter().map(|e| e.message.as_str()).collect();
@@ -397,6 +427,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.prs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retries_empty_and_cut_off_bodies() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"data": {"vie"#))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(page(vec![pr_node(1)], None))
+            .mount(&server)
+            .await;
+        let result = client(&server)
+            .await
+            .search_prs("is:pr", 10, &Reporter::none())
+            .await
+            .unwrap();
+        assert_eq!(result.prs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn gives_up_on_bodies_that_stay_empty() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(u64::from(MAX_ATTEMPTS))
+            .mount(&server)
+            .await;
+        let error = client(&server).await.count("is:pr").await.unwrap_err();
+        assert!(format!("{error:#}").contains("empty response"), "{error:#}");
     }
 
     #[tokio::test]
