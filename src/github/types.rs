@@ -184,6 +184,8 @@ pub struct RawPrDetail {
     pub id: String,
     pub review_requests: Nodes<RawReviewRequest>,
     pub my_reviews: Nodes<RawMyReview>,
+    /// Each reviewer's latest approval or change request.
+    pub latest_opinionated_reviews: Nodes<RawReview>,
     pub review_threads: Nodes<RawReviewThread>,
     pub timeline_items: Nodes<RawTimelineItem>,
 }
@@ -218,6 +220,12 @@ pub enum RawReviewer {
 #[derive(Debug, Deserialize)]
 pub struct RawOrganization {
     pub login: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawReview {
+    pub state: String,
 }
 
 #[derive(Debug, Deserialize)]

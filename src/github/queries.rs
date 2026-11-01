@@ -50,6 +50,7 @@ query PrDetails($ids: [ID!]!, $login: String!) {
       myReviews: reviews(last: 20, author: $login) {
         nodes { state submittedAt }
       }
+      latestOpinionatedReviews(first: 50) { nodes { state } }
       reviewThreads(first: 100) { nodes { isResolved } }
       timelineItems(last: 50, itemTypes: [
         PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT, ISSUE_COMMENT,

@@ -28,7 +28,7 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
         .labels
         .map(|l| l.nodes.into_iter().map(|l| l.name).collect())
         .unwrap_or_default();
-    let review_decision = raw.review_decision.as_deref().and_then(review_decision);
+    let mut review_decision = raw.review_decision.as_deref().and_then(review_decision);
     let mergeable = mergeable(&raw.mergeable);
     let merge_state = raw
         .merge_state_status
@@ -62,6 +62,17 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
                     })
                 })
                 .collect();
+            // GitHub only decides when a branch rule requires reviews; without
+            // one, the reviews themselves still say where the PR stands.
+            if review_decision.is_none() {
+                review_decision = decision_from_reviews(
+                    detail
+                        .latest_opinionated_reviews
+                        .nodes
+                        .iter()
+                        .filter_map(|r| review_state(&r.state)),
+                );
+            }
             let unresolved = detail
                 .review_threads
                 .nodes
@@ -240,6 +251,19 @@ fn review_decision(value: &str) -> Option<ReviewDecision> {
     }
 }
 
+/// Any change request outweighs approvals, as in GitHub's own decision.
+fn decision_from_reviews(states: impl Iterator<Item = ReviewState>) -> Option<ReviewDecision> {
+    let mut decision = None;
+    for state in states {
+        match state {
+            ReviewState::ChangesRequested => return Some(ReviewDecision::ChangesRequested),
+            ReviewState::Approved => decision = Some(ReviewDecision::Approved),
+            ReviewState::Commented | ReviewState::Dismissed => {}
+        }
+    }
+    decision
+}
+
 fn ci_state(value: &str) -> CiState {
     match value {
         "SUCCESS" => CiState::Pass,
@@ -351,6 +375,19 @@ mod tests {
         assert_eq!(pr.review_decision, None);
         assert_eq!(pr.mergeable, Mergeable::Unknown);
         assert_eq!(pr.ci, CiState::None);
+    }
+
+    #[test]
+    fn falls_back_to_the_reviews_without_a_decision() {
+        use ReviewState::*;
+        let decide = |states: &[ReviewState]| decision_from_reviews(states.iter().copied());
+        assert_eq!(decide(&[]), None);
+        assert_eq!(decide(&[Commented]), None);
+        assert_eq!(decide(&[Approved]), Some(ReviewDecision::Approved));
+        assert_eq!(
+            decide(&[Approved, ChangesRequested, Approved]),
+            Some(ReviewDecision::ChangesRequested)
+        );
     }
 
     #[test]
