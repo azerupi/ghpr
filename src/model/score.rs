@@ -58,18 +58,30 @@ pub fn breakdown(pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> Vec<(String
         }
     };
 
-    match pr.turn {
-        Turn::Me => add("your turn".into(), weights.turn_me),
-        Turn::Team => add("team's turn".into(), weights.turn_team),
-        Turn::Merge => add("ready to merge".into(), weights.turn_merge),
-        Turn::Queued | Turn::Author | Turn::Reviewers | Turn::Blocked => {}
-    }
+    let on_me = match pr.turn {
+        Turn::Me => {
+            add("your turn".into(), weights.turn_me);
+            true
+        }
+        Turn::Team => {
+            add("team's turn".into(), weights.turn_team);
+            true
+        }
+        Turn::Merge => {
+            add("ready to merge".into(), weights.turn_merge);
+            true
+        }
+        Turn::Queued | Turn::Author | Turn::Reviewers | Turn::Blocked => false,
+    };
     if pr.mentions_me {
         add("mentioned".into(), weights.mentioned);
     }
-    let days = (now.as_second() - pr.waiting_since.as_second()).max(0) / 86_400;
-    let days = days.min(weights.cap_waiting_days.max(0) as i64) as i32;
-    add(format!("waiting {days}d"), days * weights.waiting_per_day);
+    // Time spent waiting on someone else doesn't make it any more urgent for you.
+    if on_me {
+        let days = (now.as_second() - pr.waiting_since.as_second()).max(0) / 86_400;
+        let days = days.min(weights.cap_waiting_days.max(0) as i64) as i32;
+        add(format!("waiting {days}d"), days * weights.waiting_per_day);
+    }
     if pr.additions + pr.deletions < weights.small_pr_lines {
         add("small".into(), weights.small_pr_bonus);
     }
@@ -140,7 +152,21 @@ mod tests {
         let mut weights = ScoreWeights::default();
         weights.label.insert("urgent".into(), 50);
         weights.repo.insert("acme/api".into(), 20);
-        assert_eq!(score(&p, &weights, now()), -80 - 40 - 30 + 50 + 20 + 10);
+        assert_eq!(score(&p, &weights, now()), -80 - 40 - 30 + 50 + 20);
+    }
+
+    #[test]
+    fn waiting_only_counts_when_its_on_you() {
+        let mut p = pr(1);
+        p.waiting_since = "2026-01-01T00:00:00Z".parse().unwrap();
+        for turn in [Turn::Author, Turn::Reviewers, Turn::Blocked, Turn::Queued] {
+            p.turn = turn;
+            let parts = breakdown(&p, &ScoreWeights::default(), now());
+            assert!(
+                !parts.iter().any(|(l, _)| l.starts_with("waiting")),
+                "{turn:?}: {parts:?}"
+            );
+        }
     }
 
     #[test]

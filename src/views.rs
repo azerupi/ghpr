@@ -127,7 +127,7 @@ pub fn resolve(
                     Keep::All,
                 )],
                 "-draft",
-                "waiting",
+                "score",
             )
         }
         "org" => {
@@ -157,7 +157,7 @@ pub fn resolve(
                     keep: Keep::All,
                 }],
                 "-draft",
-                "waiting",
+                "score",
             )
         }
         _ => {
@@ -279,7 +279,7 @@ mod tests {
         );
         assert_eq!(
             (view.filter.as_str(), view.sort.as_str()),
-            ("-draft", "waiting")
+            ("-draft", "score")
         );
 
         let given = [repo("acme/api"), repo("acme/web"), repo("other/x")];

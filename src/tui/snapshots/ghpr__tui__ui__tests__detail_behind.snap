@@ -10,7 +10,7 @@ expression: screen
 "Turn: author for 2d · Last: alice (author) pushed a commit 2d ago · ★ new since you last looked                         "
 "Review: approved · You haven't reviewed                                                                                 "
 "CI: ✓ pass · behind main: update the branch · Labels: bug, auth                                                         "
-"Score: 25 = small +15, waiting 2d +10                                                                                   "
+"Score: 15 = small +15                                                                                                   "
 "https://github.com/acme/api/pull/2                                                                                      "
 "                                                                                                                        "
 "                                                                                                          cached 0m ago "
