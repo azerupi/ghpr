@@ -23,6 +23,11 @@ const FLASH_FOR: SignedDuration = SignedDuration::from_secs(4);
 /// How often an instance that doesn't notify checks whether the one that
 /// did has gone. Only a local lock, so it's cheap.
 const NOTIFY_LOCK_RETRY: SignedDuration = SignedDuration::from_secs(30);
+/// How long a tab must stay on screen before switching to it refreshes it, so
+/// tabs skipped over on the way to another don't each start a fetch. Measured
+/// from the tick before the switch, so with 250ms ticks the fetch starts 250 to
+/// 500ms after landing.
+const SETTLE: SignedDuration = SignedDuration::from_millis(300);
 
 /// One-key filter toggles: key, filter term, description.
 pub const TOGGLES: &[(char, &str, &str)] = &[
@@ -175,6 +180,8 @@ pub struct App {
     /// profile, only one notifies.
     notifying: bool,
     lock_attempt: Option<Timestamp>,
+    /// When the active tab was switched to; `None` once it has settled.
+    switched_at: Option<Timestamp>,
 }
 
 /// An open text prompt at the bottom of the screen.
@@ -277,6 +284,7 @@ impl App {
             notifier,
             notifying: false,
             lock_attempt: None,
+            switched_at: None,
         }
     }
 
@@ -367,10 +375,16 @@ impl App {
                 {
                     self.flash = None;
                 }
-                // The tab on screen refreshes in the background, and so does
-                // the notifying one.
+                // The tab on screen refreshes in the background, once it has
+                // settled, and so does the notifying one.
+                if self
+                    .switched_at
+                    .is_some_and(|at| now.duration_since(at) >= SETTLE)
+                {
+                    self.switched_at = None;
+                }
                 let mut cmds = Vec::new();
-                if self.is_stale(self.active) {
+                if self.switched_at.is_none() && self.is_stale(self.active) {
                     cmds.extend(self.fetch(self.active));
                 }
                 if let Some(tab) = self.notify_tab()
@@ -539,11 +553,9 @@ impl App {
         self.active = index;
         // Scores and "waiting" depend on the time, so re-sort what's cached.
         self.recompute(index);
-        if self.is_stale(index) {
-            self.fetch(index)
-        } else {
-            Vec::new()
-        }
+        // The next ticks fetch it if it's stale and still on screen.
+        self.switched_at = Some(self.now);
+        Vec::new()
     }
 
     fn is_stale(&self, index: usize) -> bool {
@@ -1623,17 +1635,24 @@ pub mod tests {
     #[test]
     fn switching_tabs_fetches_ones_not_loaded_yet() {
         let mut app = tabbed();
+        let tick = |ms| Msg::Tick(now() + SignedDuration::from_millis(ms));
         assert_eq!(app.init(), [Cmd::Fetch(0)]);
-        assert_eq!(app.update(char(']')), [Cmd::Fetch(1)]);
+        assert!(app.update(char(']')).is_empty(), "not until it settles");
         assert_eq!(app.active, 1);
         assert!(app.tab().prs.is_empty());
-        assert_eq!(app.update(char(']')), [Cmd::Fetch(2)]);
+        assert!(app.update(tick(250)).is_empty());
+        assert_eq!(app.update(tick(500)), [Cmd::Fetch(1)]);
+
+        app.update(char(']'));
+        assert_eq!(app.update(tick(1000)), [Cmd::Fetch(2)]);
+        app.update(char(']'));
         assert!(
-            app.update(char(']')).is_empty(),
+            app.update(tick(1500)).is_empty(),
             "back to 0, fetched just now"
         );
         assert_eq!(app.active, 0);
-        assert!(app.update(char('[')).is_empty(), "2 is still refreshing");
+        app.update(char('['));
+        assert!(app.update(tick(2000)).is_empty(), "2 is still refreshing");
         assert_eq!(app.active, 2);
 
         let alt = |c| Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
@@ -1641,6 +1660,22 @@ pub mod tests {
         assert_eq!(app.active, 1);
         app.update(alt('9'));
         assert_eq!(app.active, 1, "no such tab");
+    }
+
+    #[test]
+    fn tabs_passed_through_are_not_fetched() {
+        let mut app = tabbed();
+        app.init();
+        let tick = |ms| Msg::Tick(now() + SignedDuration::from_millis(ms));
+        app.update(char(']'));
+        assert!(app.update(tick(250)).is_empty());
+        app.update(char(']'));
+        assert!(
+            app.update(tick(500)).is_empty(),
+            "1 was left before settling"
+        );
+        assert_eq!(app.update(tick(750)), [Cmd::Fetch(2)]);
+        assert!(!app.tabs[1].refreshing);
     }
 
     #[test]
