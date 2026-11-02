@@ -53,6 +53,11 @@ pub const KEYS: &[KeyInfo] = &[
     key("last", "who acted last", ValueKind::Enum),
     key("snoozed", "how it's snoozed", ValueKind::Enum),
     key(
+        "status",
+        "what stands between it and merging",
+        ValueKind::Enum,
+    ),
+    key(
         "waiting",
         "time in its current turn (>2d, <3h, 1d..1w)",
         ValueKind::Time,
@@ -109,6 +114,7 @@ pub fn enum_values(key: &str) -> Option<Vec<(&'static str, &'static str)>> {
         "review" => names(REVIEW),
         "mine" => names(MINE),
         "snoozed" => names(SNOOZED),
+        "status" => crate::model::STATUS_NAMES.to_vec(),
         _ => return None,
     })
 }
@@ -194,6 +200,13 @@ fn key_value(key: &str, value: &str, tz: &TimeZone) -> Result<Pred, String> {
         "review" => Pred::Review(one_of(key, values(), REVIEW)?),
         "mine" => Pred::Mine(one_of(key, values(), MINE)?),
         "snoozed" => Pred::Snoozed(one_of(key, values(), SNOOZED)?),
+        "status" => {
+            let names: Vec<(&str, &'static str, &str)> = crate::model::STATUS_NAMES
+                .iter()
+                .map(|(name, desc)| (*name, *name, *desc))
+                .collect();
+            Pred::Status(one_of(key, values(), &names)?)
+        }
         "age" => Pred::Age(
             values()
                 .map(|v| time_cond(key, v, tz))
@@ -254,8 +267,13 @@ const LAST: &[(&str, LastRole, &str)] = &[
 ];
 const CI: &[(&str, CiState, &str)] = &[
     ("pass", CiState::Pass, "all checks passed"),
-    ("fail", CiState::Fail, "a check failed"),
+    ("fail", CiState::Fail, "a required check failed"),
     ("pending", CiState::Pending, "checks still running"),
+    (
+        "optional",
+        CiState::Optional,
+        "only checks that aren't required failed",
+    ),
     ("none", CiState::None, "no checks"),
 ];
 const REVIEW: &[(&str, Option<ReviewDecision>, &str)] = &[

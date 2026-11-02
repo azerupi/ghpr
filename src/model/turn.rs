@@ -10,7 +10,7 @@ use super::{
 };
 
 /// Labels that mean "don't review or merge this yet" (compared case-insensitively).
-const BLOCKING_LABELS: &[&str] = &["blocked", "wip", "do not merge", "do-not-merge"];
+pub const BLOCKING_LABELS: &[&str] = &["blocked", "wip", "do not merge", "do-not-merge"];
 
 /// The user the turn is computed for, plus the settings that affect it.
 #[derive(Debug, Clone, Default)]
@@ -224,7 +224,7 @@ pub fn derive(facts: &Facts, events: &[Event], viewer: &Viewer) -> Derived {
     // well enough to rely on; those repos go by approval, CI, and conflicts.
     let gated = !facts.queue_enabled;
     let mergeable = approved
-        && matches!(facts.ci, CiState::Pass | CiState::None)
+        && matches!(facts.ci, CiState::Pass | CiState::Optional | CiState::None)
         && facts.mergeable == Mergeable::Clean
         && !(gated
             && matches!(
@@ -273,7 +273,8 @@ pub fn derive(facts: &Facts, events: &[Event], viewer: &Viewer) -> Derived {
         } else if let Some(entry) = ejecting {
             (Turn::Author, Some(entry.enqueued_at))
         } else if broken {
-            (Turn::Blocked, Some(last_at))
+            // Failing required checks or conflicts: the author has to fix them.
+            (Turn::Author, Some(last_at))
         } else if directly_requested {
             let since = latest_request_for(&|r| matches!(r, Reviewer::User(l) if viewer.is(l)));
             (Turn::Me, since.or_else(|| run_start(Side::Author)))
@@ -580,14 +581,18 @@ mod tests {
     }
 
     #[test]
-    fn failing_ci_blocks_even_when_requested() {
+    fn failing_ci_is_the_authors_turn_even_when_requested() {
         let mut pr = Pr::by(AUTHOR).request(AUTHOR, user(ME), t(2, 10));
         pr.ci = CiState::Fail;
-        assert_eq!(pr.derive().turn, Turn::Blocked);
+        assert_eq!(pr.derive().turn, Turn::Author);
 
         let mut pr = Pr::by(AUTHOR).request(AUTHOR, user(ME), t(2, 10));
         pr.mergeable = Mergeable::Conflicting;
-        assert_eq!(pr.derive().turn, Turn::Blocked);
+        assert_eq!(pr.derive().turn, Turn::Author);
+
+        let mut pr = Pr::by(AUTHOR).request(AUTHOR, user(ME), t(2, 10));
+        pr.ci = CiState::Optional;
+        assert_eq!(pr.derive().turn, Turn::Me, "optional checks don't block");
     }
 
     #[test]

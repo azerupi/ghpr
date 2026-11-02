@@ -1462,12 +1462,14 @@ pub mod tests {
         app.update(char('S'));
         assert_eq!(shown(&app), [1, 2, 3], "S reverses");
 
-        app.update(char('3')); // the # column, already primary: flips
+        app.update(char('4')); // the # column, already primary: flips
         assert_eq!(app.tab().sort.to_text(), "-number");
         app.update(char('1'));
         assert_eq!(app.tab().sort.to_text(), "turn");
+        app.update(char('2'));
+        assert_eq!(app.tab().sort.to_text(), "status");
         app.update(char('0'));
-        app.update(char('9')); // the waiting column
+        app.update(char('8')); // the waiting column
         assert_eq!(app.tab().sort.to_text(), "waiting");
         app.update(char('/'));
         app.update(key(KeyCode::Esc));
@@ -1526,7 +1528,7 @@ pub mod tests {
     fn tab_accepts_a_single_match_then_offers_values() {
         let mut app = app_with(3);
         app.update(char('/'));
-        typing(&mut app, "tu");
+        typing(&mut app, "tur");
         app.update(tab());
         assert_eq!(prompt(&app).input.text(), "turn:");
         assert!(prompt(&app).menu.is_none());

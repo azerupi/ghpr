@@ -30,6 +30,7 @@ pub fn pr_titled(number: u64, title: &str) -> Pr {
         changed_files: 3,
         review_decision: Some(ReviewDecision::Approved),
         ci: CiState::Pass,
+        checks: Vec::new(),
         mergeable: Mergeable::Clean,
         merge_state: MergeState::Clean,
         queue_enabled: false,

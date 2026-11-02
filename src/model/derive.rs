@@ -4,10 +4,10 @@ use color_eyre::eyre::{Result, eyre};
 
 use super::turn::{self, Event, Facts};
 use super::{
-    ActivityKind, CiState, MergeState, Mergeable, MyReview, Pr, QueueEntry, QueueState, RepoName,
-    ReviewDecision, ReviewState, Reviewer,
+    ActivityKind, Check, CheckState, CiState, MergeState, Mergeable, MyReview, Pr, QueueEntry,
+    QueueState, RepoName, ReviewDecision, ReviewState, Reviewer,
 };
-use crate::github::types::{RawActor, RawPr, RawPrDetail, RawReviewer, RawTimelineItem};
+use crate::github::types::{RawActor, RawCheck, RawPr, RawPrDetail, RawReviewer, RawTimelineItem};
 
 pub use super::turn::{TeamMode, Viewer};
 
@@ -18,7 +18,7 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
         .name_with_owner
         .parse()
         .map_err(|e| eyre!("PR {}: {e}", raw.url))?;
-    let ci = raw
+    let mut ci = raw
         .commits
         .nodes
         .last()
@@ -43,8 +43,24 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
     let author_is_bot = raw.author.as_ref().is_some_and(RawActor::is_bot);
     let author = raw.author.map(|a| a.login);
 
+    let mut checks = Vec::new();
     let (requested_reviewers, my_reviews, unresolved_threads, events) = match detail {
         Some(detail) => {
+            let all: Vec<(Check, bool)> = detail
+                .checks
+                .nodes
+                .into_iter()
+                .filter_map(|n| n.commit.status_check_rollup)
+                .flat_map(|r| r.contexts.nodes)
+                .filter_map(check)
+                .collect();
+            if !all.is_empty() {
+                ci = ci_from_checks(&all);
+                checks = all
+                    .into_iter()
+                    .filter_map(|(check, passed)| (!passed).then_some(check))
+                    .collect();
+            }
             let requested = detail
                 .review_requests
                 .nodes
@@ -130,6 +146,7 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
         changed_files: raw.changed_files,
         review_decision,
         ci,
+        checks,
         mergeable,
         merge_state,
         queue_enabled: raw.is_merge_queue_enabled,
@@ -265,6 +282,65 @@ fn decision_from_reviews(states: impl Iterator<Item = ReviewState>) -> Option<Re
     decision
 }
 
+/// A check, and whether it passed (successful, neutral, or skipped).
+fn check(raw: RawCheck) -> Option<(Check, bool)> {
+    let (name, state, required) = match raw {
+        RawCheck::CheckRun {
+            name,
+            status,
+            conclusion,
+            is_required,
+        } => {
+            let state = match (status.as_str(), conclusion.as_deref()) {
+                ("COMPLETED", Some("SUCCESS" | "NEUTRAL" | "SKIPPED")) => None,
+                ("COMPLETED", _) => Some(CheckState::Fail),
+                _ => Some(CheckState::Pending),
+            };
+            (name, state, is_required)
+        }
+        RawCheck::StatusContext {
+            context,
+            state,
+            is_required,
+        } => {
+            let state = match ci_state(&state) {
+                CiState::Fail => Some(CheckState::Fail),
+                CiState::Pending => Some(CheckState::Pending),
+                _ => None,
+            };
+            (context, state, is_required)
+        }
+        RawCheck::Unknown => return None,
+    };
+    Some((
+        Check {
+            name,
+            state: state.unwrap_or(CheckState::Pending),
+            required,
+        },
+        state.is_none(),
+    ))
+}
+
+/// Only required checks decide, in repos that require some; otherwise all do.
+fn ci_from_checks(checks: &[(Check, bool)]) -> CiState {
+    let any_required = checks.iter().any(|(c, _)| c.required);
+    let deciding = |c: &Check| c.required || !any_required;
+    let failed = |c: &Check, passed: bool| !passed && c.state == CheckState::Fail;
+    if checks.iter().any(|(c, p)| deciding(c) && failed(c, *p)) {
+        CiState::Fail
+    } else if checks
+        .iter()
+        .any(|(c, p)| deciding(c) && !p && c.state == CheckState::Pending)
+    {
+        CiState::Pending
+    } else if checks.iter().any(|(c, p)| failed(c, *p)) {
+        CiState::Optional
+    } else {
+        CiState::Pass
+    }
+}
+
 fn ci_state(value: &str) -> CiState {
     match value {
         "SUCCESS" => CiState::Pass,
@@ -389,6 +465,45 @@ mod tests {
             decide(&[Approved, ChangesRequested, Approved]),
             Some(ReviewDecision::ChangesRequested)
         );
+    }
+
+    #[test]
+    fn only_required_checks_decide_ci_when_some_are_required() {
+        let c = |name: &str, state: Option<CheckState>, required| {
+            (
+                Check {
+                    name: name.into(),
+                    state: state.unwrap_or(CheckState::Pending),
+                    required,
+                },
+                state.is_none(),
+            )
+        };
+        use CheckState::{Fail, Pending};
+        let gate = |state| c("gate", state, true);
+        assert_eq!(
+            ci_from_checks(&[gate(None), c("e2e", Some(Fail), false)]),
+            CiState::Optional
+        );
+        assert_eq!(
+            ci_from_checks(&[gate(None), c("e2e", Some(Pending), false)]),
+            CiState::Pass
+        );
+        assert_eq!(
+            ci_from_checks(&[gate(Some(Pending)), c("e2e", Some(Fail), false)]),
+            CiState::Pending
+        );
+        assert_eq!(ci_from_checks(&[gate(Some(Fail))]), CiState::Fail);
+        // Nothing required: every check counts.
+        assert_eq!(
+            ci_from_checks(&[c("e2e", Some(Fail), false)]),
+            CiState::Fail
+        );
+        assert_eq!(
+            ci_from_checks(&[c("e2e", Some(Pending), false)]),
+            CiState::Pending
+        );
+        assert_eq!(ci_from_checks(&[c("e2e", None, false)]), CiState::Pass);
     }
 
     #[test]

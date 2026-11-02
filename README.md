@@ -10,10 +10,10 @@ it has been waiting, then ranks them so the ones waiting on you come first.
 ```
  ghpr   for-me  mine  backend                                  [ ] views · ? help
  21 of 23 PRs · 7 your turn · 2 new · 2 snoozed/muted hidden · sort: score
-  TURN      REPO               #    TITLE                     AUTHOR  CI REVIEW   WAIT
-★ me        acme/api        1234    Fix token refresh race    alice   ✓  changes  3d
-  me        acme/web         889    Migrate settings page     bob     ✗  approved 1d
-  reviewers acme/api        1201    Add tracing to job runner me      ✓  required 5h
+  TURN      STAT  REPO        #  TITLE                      AUTHOR  WAIT
+★ me        ✓✓✎✓  acme/api  1234  Fix token refresh race     alice   3d
+  me        ✓✗✓≠  acme/web   889  Migrate settings page      bob     1d
+  reviewers ✓✓?✓  acme/api  1201  Add tracing to job runner  me      5h
 ```
 
 It only reads from GitHub. Reviewing, approving, and checking out branches
@@ -61,9 +61,9 @@ The turn comes from the PR's latest activity by a person (bots are ignored):
 | `team` | Requested from one of your configured teams, not you directly. |
 | `merge` | Approved, green, and mergeable: nothing branch protection requires is missing. |
 | `queued` | In the merge queue; nothing to do but wait. |
-| `author` | A reviewer acted last, or it's approved but behind its base; waiting on the author. |
+| `author` | A reviewer acted last, required CI fails, there are conflicts, or it's approved but behind its base; waiting on the author. |
 | `reviewers` | The author acted last; waiting on someone other than you. |
-| `blocked` | Draft, failing CI, merge conflicts, or a `wip` / `blocked` / `do-not-merge` label. |
+| `blocked` | A draft, or a `wip` / `blocked` / `do-not-merge` label: nobody is expected to act. |
 
 Whether it's mergeable comes from GitHub's merge state, which knows about
 branch protection: approved PRs that still need a second approval or a
@@ -73,6 +73,31 @@ author. In repos with a merge queue, the queue tests the
 merged result, so there only approval, CI, and conflicts count. The detail
 pane spells out the merge state, or the PR's place in the queue and GitHub's
 estimate of the time left.
+
+Only **required** checks count as failing CI, in repos that require some: a
+failing check that isn't required shows as a yellow `✓` in STAT (`ci:optional`)
+and doesn't block. In repos that require none, every check counts.
+
+## What's holding it up?
+
+The STAT column has one symbol each for the PR's state, CI, review, and
+mergeability. A green `✓` means that part is fine, so `✓✓✓✓` is ready to merge.
+
+| Slot | Otherwise |
+|---|---|
+| state | `◌` draft or `wip`-style label, `⧗` in the merge queue, `⏏` leaving it |
+| CI | `✗` a required check failed, `◷` running, yellow `✓` only optional checks failed |
+| review | `✎` changes requested, `?` needs (more) approvals |
+| merge | `≠` conflicts, `↓` behind its base, `⊘` blocked by a rule GitHub doesn't name (code owners, say) |
+
+`·` means not known yet, or no checks or reviews. The detail pane repeats the
+selected PR's symbols in the same order, each with what it means (`✗ CI
+failing: lint, test   ≠ conflicts with main`), and `?` shows the legend.
+
+Filter with `status:` (`ejecting`, `queued`, `draft`, `label`, `conflicts`,
+`ci`, `changes`, `pending`, `behind`, `review`, `rules`, `approved`, `ready`,
+`optional`, `threads`); it matches any that applies. In templates, `{status}`
+gives them as words (`CI approved 2💬`).
 
 GitHub removes you from the requested reviewers once you review, so the
 `for-me` view also searches PRs you've reviewed and mentions of you, keeping
@@ -108,8 +133,8 @@ turn:me -draft waiting:>2d repo:acme/* label:"needs review" ci:fail,pending
 - Keys: `turn`, `repo`, `org`, `author`, `reviewer`, `team`, `label`, `ci`,
   `merge` (`clean`, `unstable`, `behind`, `blocked`, `conflict`, `unknown`, `queued`),
   `review`, `mine` (`unreviewed`, `stale`, `approved`, `changes`, `commented`),
-  `last`, `snoozed` (`hidden`, `demoted`), `waiting`, `updated`, `age`, `size`,
-  `files`, `threads`, `base`, `head`.
+  `last`, `status` (see above), `snoozed` (`hidden`, `demoted`), `waiting`,
+  `updated`, `age`, `size`, `files`, `threads`, `base`, `head`.
 - Flags: `draft`, `conflict`, `bot`, `mentioned`, `new`, `snoozed`, `muted`.
 - Times: `>2d`, `<3h`, `1d..1w`, or dates like `2026-09-01..2026-09-20`.
 - Sizes: `<100`, `100..400`, or `xs`, `s`, `m`, `l`, `xl`.
@@ -212,7 +237,7 @@ cheap to run often. `--offline` never contacts GitHub; `--no-cache` always does.
 
 Template fields: `repo`, `number`, `title`, `author`, `url`, `draft`, `ci`,
 `review`, `additions`, `deletions`, `files`, `base`, `head`, `labels`,
-`created`, `updated`, `turn`, `merge`, `waiting`, `last`, `mine`, `threads`,
+`created`, `updated`, `turn`, `status`, `merge`, `waiting`, `last`, `mine`, `threads`,
 `mentioned`, `score`. `{{` and `}}` are literal braces.
 
 ## Shell completion
@@ -236,8 +261,8 @@ Everything is optional:
 default_view = "for-me"
 refresh_interval = "5m"
 bots = ["some-ci-user"]      # GitHub App bots are detected automatically
-columns = ["turn", "repo", "number", "title", "author", "size", "ci", "review", "waiting", "last"]
-# also available: merge, updated, age, score, threads, files, labels
+columns = ["turn", "status", "repo", "number", "title", "author", "size", "waiting", "last"]
+# also available: ci, review, updated, age, score, threads, files, labels
 
 [team_reviews]
 teams = ["acme/platform"]    # team review requests to include in for-me

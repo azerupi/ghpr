@@ -7,12 +7,13 @@ use std::cmp::Ordering;
 
 use jiff::Timestamp;
 
-use crate::model::{CiState, Pr, ReviewDecision, ScoreWeights, score};
+use crate::model::{CiState, Pr, ReviewDecision, ScoreWeights, score, statuses};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Score,
     Turn,
+    Status,
     Waiting,
     Updated,
     Created,
@@ -31,6 +32,7 @@ pub enum SortKey {
 pub const KEYS: &[(&str, SortKey, &str)] = &[
     ("score", SortKey::Score, "highest first"),
     ("turn", SortKey::Turn, "your turn first"),
+    ("status", SortKey::Status, "most pressing status first"),
     ("waiting", SortKey::Waiting, "longest waiting first"),
     ("updated", SortKey::Updated, "most recently updated first"),
     ("created", SortKey::Created, "newest first"),
@@ -147,6 +149,7 @@ fn compare(key: SortKey, a: &Pr, b: &Pr, score_a: i32, score_b: i32) -> Ordering
     match key {
         SortKey::Score => score_b.cmp(&score_a),
         SortKey::Turn => a.turn.cmp(&b.turn),
+        SortKey::Status => status_rank(a).cmp(&status_rank(b)),
         SortKey::Waiting => a.waiting_since.cmp(&b.waiting_since),
         SortKey::Updated => b.updated_at.cmp(&a.updated_at),
         SortKey::Created => b.created_at.cmp(&a.created_at),
@@ -166,12 +169,18 @@ fn compare(key: SortKey, a: &Pr, b: &Pr, score_a: i32, score_b: i32) -> Ordering
     }
 }
 
+/// Where the PR's most pressing status comes in the list of them; no status last.
+fn status_rank(pr: &Pr) -> usize {
+    statuses(pr).first().map_or(usize::MAX, |s| s.rank())
+}
+
 fn ci_rank(ci: CiState) -> u8 {
     match ci {
         CiState::Fail => 0,
         CiState::Pending => 1,
-        CiState::Pass => 2,
-        CiState::None => 3,
+        CiState::Optional => 2,
+        CiState::Pass => 3,
+        CiState::None => 4,
     }
 }
 

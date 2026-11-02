@@ -380,9 +380,7 @@ mod tests {
             .mount(&server)
             .await;
             Mock::given(body_partial_json(json!({ "variables": { "login": "me" } })))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(json!({ "data": { "nodes": [] } })),
-                )
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": {} })))
                 .mount(&server)
                 .await;
 

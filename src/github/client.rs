@@ -10,7 +10,7 @@ use crate::progress::{Progress, Reporter};
 use futures::{StreamExt, TryStreamExt, stream};
 
 use super::types::{
-    CountData, GraphQlResponse, NodesData, OrgTeamsData, PrStateData, RawPr, RawPrDetail,
+    CountData, DetailsData, GraphQlResponse, OrgTeamsData, PrStateData, RawPr, RawPrDetail,
     SearchData, ViewerOrgsData,
 };
 
@@ -141,11 +141,14 @@ impl Client {
         reporter: &Reporter,
     ) -> Result<(usize, Vec<RawPrDetail>)> {
         let requested = ids.len();
-        let variables = json!({ "ids": ids, "login": viewer });
-        let data: NodesData = self
-            .graphql(queries::PR_DETAILS, variables, reporter)
+        let mut variables = json!({ "login": viewer });
+        for (i, id) in ids.iter().enumerate() {
+            variables[format!("id{i}")] = id.as_str().into();
+        }
+        let data: DetailsData = self
+            .graphql(&queries::pr_details(requested), variables, reporter)
             .await?;
-        Ok((requested, data.nodes.into_iter().flatten().collect()))
+        Ok((requested, data.into_values().flatten().collect()))
     }
 
     /// The viewer's login and the organizations they belong to.
@@ -335,11 +338,19 @@ fn summarize(variables: &serde_json::Value) -> String {
     let Some(map) = variables.as_object() else {
         return variables.to_string();
     };
+    // `id0`, `id1`, ... (one per PR in a details batch) count as one list.
+    let is_numbered_id = |key: &str| {
+        key.strip_prefix("id")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let ids = map.keys().filter(|k| is_numbered_id(k)).count();
     map.iter()
+        .filter(|(key, _)| !is_numbered_id(key))
         .map(|(key, value)| match value {
             serde_json::Value::Array(items) => format!("{key}=[{} items]", items.len()),
             other => format!("{key}={other}"),
         })
+        .chain((ids > 0).then(|| format!("ids=[{ids} items]")))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -404,7 +415,7 @@ mod tests {
     fn log_helpers() {
         assert_eq!(operation_name(queries::SEARCH_PRS), "SearchPrs");
         assert_eq!(operation_name(queries::ORG_TEAMS), "OrgTeams");
-        assert_eq!(operation_name(queries::PR_DETAILS), "PrDetails");
+        assert_eq!(operation_name(&queries::pr_details(2)), "PrDetails");
         let vars = json!({ "ids": ["a", "b"], "login": "me" });
         assert_eq!(summarize(&vars), "ids=[2 items] login=\"me\"");
     }
@@ -477,7 +488,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "nodes": [] }
+                "data": {}
             })))
             .mount(&server)
             .await;

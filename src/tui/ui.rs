@@ -12,7 +12,7 @@ use crate::filter::Mark;
 use crate::model::{
     CiState, MergeState, Mergeable, Pr, QueueState, ReviewDecision, ReviewState, Reviewer, Turn,
 };
-use crate::model::{ScoreWeights, breakdown};
+use crate::model::{ScoreWeights, Tone, breakdown, slots};
 use crate::output::{age, span};
 use crate::progress::{STALL_SECS, elapsed};
 use crate::state::{Flags, Snooze, SnoozeMode};
@@ -263,6 +263,7 @@ fn cell(column: Column, pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> Cell
             format!("-{}", pr.deletions).red(),
         ])),
         Column::Ci => Cell::from(ci_symbol(pr.ci)),
+        Column::Status => Cell::from(status_line(pr)),
         Column::Review => Cell::from(review_span(pr.review_decision)),
         Column::Waiting => {
             let style = match now.duration_since(pr.waiting_since).as_secs() {
@@ -348,11 +349,32 @@ fn turn_style(turn: Turn) -> Style {
     }
 }
 
+/// The STAT symbols, each colored by what it says.
+fn status_line(pr: &Pr) -> Line<'static> {
+    Line::from(
+        slots(pr)
+            .into_iter()
+            .map(|s| Span::styled(s.symbol, tone_style(s.tone)))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn tone_style(tone: Tone) -> Style {
+    match tone {
+        Tone::Fine => Style::new().green(),
+        Tone::Bad => Style::new().red(),
+        Tone::Waiting => Style::new().yellow(),
+        Tone::Parked => Style::new().dark_gray(),
+        Tone::Queued => Style::new().magenta(),
+    }
+}
+
 fn ci_symbol(ci: CiState) -> Span<'static> {
     match ci {
         CiState::Pass => "✓".green(),
         CiState::Fail => "✗".red(),
         CiState::Pending => "●".yellow(),
+        CiState::Optional => "!".yellow(),
         CiState::None => "·".dark_gray(),
     }
 }
@@ -474,6 +496,16 @@ fn render_detail(
         review_line.push(format!(" · {} unresolved thread{s}", pr.unresolved_threads).yellow());
     }
     lines.push(Line::from(review_line));
+
+    // The STAT symbols in order, each with what it means here.
+    let mut status_line = vec![Span::raw("Status:")];
+    for (i, slot) in slots(pr).into_iter().enumerate() {
+        // Not ` · `: `·` is itself a symbol ("not known").
+        status_line.push(Span::raw(if i == 0 { " " } else { "   " }));
+        status_line.push(Span::styled(slot.symbol, tone_style(slot.tone)));
+        status_line.push(Span::raw(format!(" {}", slot.meaning)));
+    }
+    lines.push(Line::from(status_line));
 
     let mut health = vec![
         Span::raw("CI: "),
@@ -771,6 +803,18 @@ const HELP: &[(&str, &str)] = &[
     ("m n d b c", "toggle: my turn, new, -draft, -bot, -ci:fail"),
     ("s / S", "sort keys / reverse"),
     ("1-9", "sort by the Nth column (again: reverse)"),
+    ("", "STAT: state, CI, review, merge; ✓ green = fine"),
+    (
+        "state",
+        "◌ draft or wip label · ⧗ queued · ⏏ leaving the queue",
+    ),
+    (
+        "CI",
+        "✗ failing · ◷ running · yellow ✓ only optional failing",
+    ),
+    ("review", "✎ changes requested · ? needs review"),
+    ("merge", "≠ conflicts · ↓ behind base · ⊘ blocked by rules"),
+    ("·", "not known, or no checks / reviews"),
     ("", "Filter syntax: key:value, -negate, a,b = either"),
     (
         "repo org label",
@@ -778,6 +822,10 @@ const HELP: &[(&str, &str)] = &[
     ),
     ("author team", "logins or @me (also reviewer); team slugs"),
     ("turn", "me team merge author reviewers blocked"),
+    (
+        "status",
+        "ci conflicts changes pending review approved ready ...",
+    ),
     ("ci review mine", "ci:fail review:approved mine:stale"),
     ("age updated", ">2d <3h 1d..1w 2026-09-01; also waiting"),
     (

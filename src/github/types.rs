@@ -172,11 +172,9 @@ pub struct RawStatusRollup {
     pub state: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct NodesData {
-    /// `null` for ids that no longer resolve (e.g. a deleted repository).
-    pub nodes: Vec<Option<RawPrDetail>>,
-}
+/// `p0`, `p1`, ...: `null` for ids that no longer resolve (e.g. a deleted
+/// repository).
+pub type DetailsData = std::collections::BTreeMap<String, Option<RawPrDetail>>;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,6 +186,45 @@ pub struct RawPrDetail {
     pub latest_opinionated_reviews: Nodes<RawReview>,
     pub review_threads: Nodes<RawReviewThread>,
     pub timeline_items: Nodes<RawTimelineItem>,
+    /// The head commit's, with its check runs and statuses.
+    pub checks: Nodes<RawCheckCommitNode>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawCheckCommitNode {
+    pub commit: RawCheckCommit,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawCheckCommit {
+    pub status_check_rollup: Option<RawCheckRollup>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawCheckRollup {
+    pub contexts: Nodes<RawCheck>,
+}
+
+/// A check run (GitHub Actions and other apps) or a commit status.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+pub enum RawCheck {
+    #[serde(rename_all = "camelCase")]
+    CheckRun {
+        name: String,
+        status: String,
+        conclusion: Option<String>,
+        is_required: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    StatusContext {
+        context: String,
+        state: String,
+        is_required: bool,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]

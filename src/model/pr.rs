@@ -24,6 +24,10 @@ pub struct Pr {
     pub changed_files: u32,
     pub review_decision: Option<ReviewDecision>,
     pub ci: CiState,
+    /// Head-commit checks that failed or haven't finished; passing ones are
+    /// left out. Empty in older caches.
+    #[serde(default)]
+    pub checks: Vec<Check>,
     pub mergeable: Mergeable,
     /// What GitHub says about merging it now (branch protection included).
     pub merge_state: MergeState,
@@ -76,8 +80,11 @@ impl ReviewDecision {
 #[serde(rename_all = "snake_case")]
 pub enum CiState {
     Pass,
+    /// A check failed. Only required checks count, in repos that require some.
     Fail,
     Pending,
+    /// Required checks passed, but some that aren't required failed.
+    Optional,
     /// No checks have reported on the head commit.
     None,
 }
@@ -88,9 +95,26 @@ impl CiState {
             CiState::Pass => "pass",
             CiState::Fail => "fail",
             CiState::Pending => "pending",
+            CiState::Optional => "optional failing",
             CiState::None => "-",
         }
     }
+}
+
+/// A check run or commit status that hasn't passed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Check {
+    pub name: String,
+    pub state: CheckState,
+    /// Branch protection requires it to pass before merging.
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckState {
+    Fail,
+    Pending,
 }
 
 impl Pr {
@@ -287,7 +311,7 @@ pub enum Turn {
     Queued,
     Author,
     Reviewers,
-    /// Draft, failing CI, conflicts, or a blocking label.
+    /// A draft, or a blocking label: nobody is expected to act.
     Blocked,
 }
 

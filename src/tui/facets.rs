@@ -35,6 +35,7 @@ const FACETS: &[(&str, &str, ValuesOf)] = &[
                 CiState::Pass => "pass",
                 CiState::Fail => "fail",
                 CiState::Pending => "pending",
+                CiState::Optional => "optional",
                 CiState::None => "none",
             }
             .to_owned(),

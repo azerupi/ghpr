@@ -7,14 +7,14 @@ use std::str::FromStr;
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 
-use crate::model::{Pr, ScoreWeights, score};
+use crate::model::{Pr, ScoreWeights, score, slots};
 use crate::output::age;
 use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
     Turn,
-    Merge,
+    Status,
     Repo,
     Number,
     Title,
@@ -37,6 +37,7 @@ pub enum Column {
 const COLUMNS: &[(Column, &str, &str, u8, Option<SortKey>)] = &[
     (Column::Title, "title", "TITLE", 100, Some(SortKey::Title)),
     (Column::Turn, "turn", "TURN", 90, Some(SortKey::Turn)),
+    (Column::Status, "status", "STAT", 88, Some(SortKey::Status)),
     (Column::Number, "number", "#", 85, Some(SortKey::Number)),
     (Column::Repo, "repo", "REPO", 80, Some(SortKey::Repo)),
     (
@@ -47,7 +48,6 @@ const COLUMNS: &[(Column, &str, &str, u8, Option<SortKey>)] = &[
         Some(SortKey::Waiting),
     ),
     (Column::Ci, "ci", "CI", 60, Some(SortKey::Ci)),
-    (Column::Merge, "merge", "MERGE", 45, None),
     (
         Column::Review,
         "review",
@@ -86,13 +86,12 @@ const COLUMNS: &[(Column, &str, &str, u8, Option<SortKey>)] = &[
 
 pub const DEFAULT: &[Column] = &[
     Column::Turn,
+    Column::Status,
     Column::Repo,
     Column::Number,
     Column::Title,
     Column::Author,
     Column::Size,
-    Column::Ci,
-    Column::Review,
     Column::Waiting,
     Column::Last,
 ];
@@ -128,7 +127,7 @@ impl Column {
     pub fn text(self, pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> String {
         match self {
             Column::Turn => pr.turn.label().to_owned(),
-            Column::Merge => pr.merge_status(),
+            Column::Status => slots(pr).iter().map(|s| s.symbol).collect(),
             Column::Repo => pr.repo.to_string(),
             Column::Number => pr.number.to_string(),
             Column::Title if pr.is_draft => format!("[draft] {}", pr.title),
@@ -171,6 +170,10 @@ impl FromStr for Column {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // STATUS took over from the MERGE column.
+        if s.eq_ignore_ascii_case("merge") {
+            return Ok(Column::Status);
+        }
         COLUMNS
             .iter()
             .find(|c| c.1.eq_ignore_ascii_case(s))
@@ -241,8 +244,8 @@ mod tests {
     #[test]
     fn fit_drops_low_priority_columns_first() {
         let columns = DEFAULT;
-        // turn repo # title author size ci review wait last
-        let widths = [9, 20, 5, 60, 10, 10, 2, 8, 4, 8];
+        // turn status repo # title author size wait last
+        let widths = [9, 4, 20, 5, 60, 10, 10, 4, 8];
         let all = fit(columns, &widths, 200, 1);
         assert!(all.iter().all(|k| *k));
 
@@ -253,10 +256,12 @@ mod tests {
             .filter(|(_, k)| **k)
             .map(|(c, _)| c.name())
             .collect();
-        // 9+20+5+20+2+8+4 = 68, plus 6 spaces = 74; adding author (10+1) would be 85.
+        // 9+4+20+5+20+10+4 = 72, plus 6 spaces = 78; adding size (10+1) would be 89.
         assert_eq!(
             kept,
-            ["turn", "repo", "number", "title", "ci", "review", "waiting"]
+            [
+                "turn", "status", "repo", "number", "title", "author", "waiting"
+            ]
         );
 
         let tiny = fit(columns, &widths, 10, 1);

@@ -121,6 +121,7 @@ enum Field {
     Created,
     Updated,
     Turn,
+    Status,
     Merge,
     Waiting,
     Last,
@@ -148,6 +149,7 @@ const FIELDS: &[(&str, Field)] = &[
     ("created", Field::Created),
     ("updated", Field::Updated),
     ("turn", Field::Turn),
+    ("status", Field::Status),
     ("merge", Field::Merge),
     ("waiting", Field::Waiting),
     ("last", Field::Last),
@@ -226,6 +228,7 @@ fn field_value(pr: &Pr, field: Field, weights: &ScoreWeights, now: Timestamp) ->
         Field::Created => age(now, pr.created_at),
         Field::Updated => age(now, pr.updated_at),
         Field::Turn => pr.turn.label().to_owned(),
+        Field::Status => crate::model::status_label(pr),
         Field::Merge => pr.merge_status(),
         Field::Waiting => age(now, pr.waiting_since),
         Field::Last => last_role(pr).to_owned(),
@@ -325,9 +328,9 @@ mod tests {
             None,
         );
         let expected = "\
-TURN     REPO         #  TITLE                   AUTHOR  SIZE    CI    REVIEW    WAIT  LAST
-me       acme/api  1234  Fix token refresh race  alice   +42 -8  pass  approved  2d    author
-blocked  acme/api     7  [draft] WIP thing       ghost   +42 -8  -     -         2d    -
+TURN     STAT  REPO         #  TITLE                   AUTHOR  SIZE    WAIT  LAST
+me       ✓✓✓✓  acme/api  1234  Fix token refresh race  alice   +42 -8  2d    author
+blocked  ◌··✓  acme/api     7  [draft] WIP thing       ghost   +42 -8  2d    -
 ";
         assert_eq!(out, expected);
     }

@@ -35,42 +35,60 @@ query SearchPrs($query: String!, $first: Int!, $after: String) {
 }
 "#;
 
-/// Review, request, and timeline details for a batch of pull requests.
+/// Review, request, timeline, and check details for a batch of pull requests:
+/// `p0` for `$id0`, and so on. Each PR is its own field because whether a
+/// check is required depends on the PR, which has to be spelled out in it.
 /// `$login` is the viewer, used to fetch only their own reviews.
-pub const PR_DETAILS: &str = r#"
+pub fn pr_details(count: usize) -> String {
+    let variables: String = (0..count).map(|i| format!(", $id{i}: ID!")).collect();
+    let fields: String = (0..count)
+        .map(|i| {
+            format!(
+                "  p{i}: node(id: $id{i}) {{ ...PrDetail ... on PullRequest {{ {} }} }}\n",
+                CHECKS.replace("$id", &format!("$id{i}"))
+            )
+        })
+        .collect();
+    format!("query PrDetails($login: String!{variables}) {{\n{fields}}}\n{PR_DETAIL}")
+}
+
+/// The head commit's checks; `$id` is the PR's.
+const CHECKS: &str = "checks: commits(last: 1) { nodes { commit { statusCheckRollup { \
+    contexts(first: 100) { nodes { __typename \
+      ... on CheckRun { name status conclusion isRequired(pullRequestId: $id) } \
+      ... on StatusContext { context state isRequired(pullRequestId: $id) } \
+    } } } } } }";
+
+const PR_DETAIL: &str = r#"
 fragment Actor on Actor { login __typename }
 
-query PrDetails($ids: [ID!]!, $login: String!) {
-  nodes(ids: $ids) {
-    ... on PullRequest {
-      id
-      reviewRequests(first: 30) {
-        nodes { requestedReviewer { ...Reviewer } }
+fragment PrDetail on PullRequest {
+  id
+  reviewRequests(first: 30) {
+    nodes { requestedReviewer { ...Reviewer } }
+  }
+  myReviews: reviews(last: 20, author: $login) {
+    nodes { state submittedAt }
+  }
+  latestOpinionatedReviews(first: 50) { nodes { state } }
+  reviewThreads(first: 100) { nodes { isResolved } }
+  timelineItems(last: 50, itemTypes: [
+    PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT, ISSUE_COMMENT,
+    PULL_REQUEST_REVIEW, READY_FOR_REVIEW_EVENT, REVIEW_REQUESTED_EVENT
+  ]) {
+    nodes {
+      __typename
+      ... on PullRequestCommit {
+        commit { committedDate author { user { login } } }
       }
-      myReviews: reviews(last: 20, author: $login) {
-        nodes { state submittedAt }
-      }
-      latestOpinionatedReviews(first: 50) { nodes { state } }
-      reviewThreads(first: 100) { nodes { isResolved } }
-      timelineItems(last: 50, itemTypes: [
-        PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT, ISSUE_COMMENT,
-        PULL_REQUEST_REVIEW, READY_FOR_REVIEW_EVENT, REVIEW_REQUESTED_EVENT
-      ]) {
-        nodes {
-          __typename
-          ... on PullRequestCommit {
-            commit { committedDate author { user { login } } }
-          }
-          ... on HeadRefForcePushedEvent { actor { ...Actor } createdAt }
-          ... on IssueComment { author { ...Actor } createdAt body }
-          ... on PullRequestReview { author { ...Actor } state submittedAt body }
-          ... on ReadyForReviewEvent { actor { ...Actor } createdAt }
-          ... on ReviewRequestedEvent {
-            actor { ...Actor }
-            createdAt
-            requestedReviewer { ...Reviewer }
-          }
-        }
+      ... on HeadRefForcePushedEvent { actor { ...Actor } createdAt }
+      ... on IssueComment { author { ...Actor } createdAt body }
+      ... on PullRequestReview { author { ...Actor } state submittedAt body }
+      ... on ReadyForReviewEvent { actor { ...Actor } createdAt }
+      ... on ReviewRequestedEvent {
+        actor { ...Actor }
+        createdAt
+        requestedReviewer { ...Reviewer }
       }
     }
   }

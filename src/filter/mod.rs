@@ -38,6 +38,8 @@ enum Pred {
     Ci(Vec<CiState>),
     Review(Vec<Option<ReviewDecision>>),
     Mine(Vec<MineState>),
+    /// Any of these statuses applies (not just the most pressing one).
+    Status(Vec<&'static str>),
     Merge(Vec<MergeCond>),
     Age(Vec<TimeCond>),
     Updated(Vec<TimeCond>),
@@ -271,6 +273,9 @@ impl Pred {
             Pred::Bot => pr.author_is_bot,
             Pred::Mentioned => pr.mentions_me,
             Pred::New => ctx.flags(pr).new,
+            Pred::Status(names) => crate::model::statuses(pr)
+                .iter()
+                .any(|s| names.contains(&s.name())),
             Pred::Snoozed(modes) => {
                 let flags = ctx.flags(pr);
                 let mode = if flags.demoted {
@@ -697,6 +702,17 @@ mod tests {
         assert_eq!(shown("snoozed"), [2]);
         assert_eq!(shown("turn:me"), [1], "demoted isn't your turn");
         assert_eq!(shown("-turn:me"), [2]);
+    }
+
+    #[test]
+    fn status_matches_any_that_applies() {
+        let mut p = pr(1);
+        p.is_draft = true;
+        p.unresolved_threads = 1;
+        assert!(matches("status:draft", &p));
+        assert!(matches("status:threads", &p), "not only the first");
+        assert!(!matches("status:conflicts,ci", &p));
+        assert!(error("status:nope").contains("status"));
     }
 
     #[test]
