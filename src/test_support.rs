@@ -48,6 +48,7 @@ pub fn pr_titled(number: u64, title: &str) -> Pr {
         waiting_since: "2026-09-26T12:00:00Z".parse().unwrap(),
         mentions_me: false,
         others_active_at: Some("2026-09-26T12:00:00Z".parse().unwrap()),
+        demoted: false,
     }
 }
 

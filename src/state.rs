@@ -28,6 +28,8 @@ struct PrState {
     seen_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     snooze: Option<Snooze>,
+    #[serde(default, skip_serializing_if = "SnoozeMode::is_hide")]
+    snooze_mode: SnoozeMode,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     muted: bool,
     /// The last time the PR was part of a fetched view.
@@ -45,12 +47,32 @@ pub enum Snooze {
     },
 }
 
+/// What a snooze does while it lasts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnoozeMode {
+    /// Out of the list.
+    #[default]
+    Hide,
+    /// Still listed, but not your turn: no turn or mention points, and it
+    /// doesn't count or notify as your turn.
+    Demote,
+}
+
+impl SnoozeMode {
+    fn is_hide(&self) -> bool {
+        *self == SnoozeMode::Hide
+    }
+}
+
 /// The local state of one PR, as the UI and filters see it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Flags {
     pub new: bool,
     /// The snooze, if it's still in effect.
     pub snoozed: Option<Snooze>,
+    /// The snooze in effect keeps the PR listed, but lower.
+    pub demoted: bool,
     pub muted: bool,
 }
 
@@ -72,6 +94,8 @@ impl LocalState {
         });
         Flags {
             new: activity > seen,
+            demoted: snoozed.is_some()
+                && entry.is_some_and(|e| e.snooze_mode == SnoozeMode::Demote),
             snoozed,
             muted: entry.is_some_and(|e| e.muted),
         }
@@ -87,12 +111,23 @@ impl LocalState {
         self.entry(id).seen_at = Some(Timestamp::MIN);
     }
 
-    pub fn snooze(&mut self, id: &str, snooze: Snooze) {
-        self.entry(id).snooze = Some(snooze);
+    pub fn snooze(&mut self, id: &str, snooze: Snooze, mode: SnoozeMode) {
+        let entry = self.entry(id);
+        entry.snooze = Some(snooze);
+        entry.snooze_mode = mode;
     }
 
     pub fn unsnooze(&mut self, id: &str) {
-        self.entry(id).snooze = None;
+        let entry = self.entry(id);
+        entry.snooze = None;
+        entry.snooze_mode = SnoozeMode::Hide;
+    }
+
+    /// Set [`Pr::demoted`] from the snoozes in effect, for scoring and sorting.
+    pub fn mark_demoted(&self, prs: &mut [Pr], now: Timestamp) {
+        for pr in prs {
+            pr.demoted = self.flags(pr, now).demoted;
+        }
     }
 
     pub fn set_muted(&mut self, id: &str, muted: bool) {
@@ -223,7 +258,11 @@ mod tests {
     fn snoozes_expire_or_wake_on_activity() {
         let mut state = LocalState::new(now());
         let mut p = pr(1);
-        state.snooze(&p.id, Snooze::Until(at("2026-09-29T00:00:00Z")));
+        state.snooze(
+            &p.id,
+            Snooze::Until(at("2026-09-29T00:00:00Z")),
+            SnoozeMode::Hide,
+        );
         assert!(state.flags(&p, now()).snoozed.is_some());
         assert!(
             state
@@ -237,6 +276,7 @@ mod tests {
             Snooze::UntilActivity {
                 after: at("2026-09-26T12:00:00Z"),
             },
+            SnoozeMode::Hide,
         );
         assert!(state.flags(&p, now()).snoozed.is_some());
         p.others_active_at = Some(at("2026-09-28T09:00:00Z"));
@@ -248,6 +288,27 @@ mod tests {
         state.unsnooze(&p.id);
         p.others_active_at = Some(at("2026-09-26T12:00:00Z"));
         assert!(state.flags(&p, now()).snoozed.is_none());
+    }
+
+    #[test]
+    fn demoting_snoozes_wake_like_hiding_ones() {
+        let mut state = LocalState::new(now());
+        let mut p = pr(1);
+        let after = at("2026-09-26T12:00:00Z");
+        state.snooze(&p.id, Snooze::UntilActivity { after }, SnoozeMode::Demote);
+        let flags = state.flags(&p, now());
+        assert!(flags.snoozed.is_some() && flags.demoted);
+
+        let mut prs = vec![p.clone()];
+        state.mark_demoted(&mut prs, now());
+        assert!(prs[0].demoted);
+
+        p.others_active_at = Some(at("2026-09-28T09:00:00Z"));
+        let flags = state.flags(&p, now());
+        assert!(flags.snoozed.is_none() && !flags.demoted, "woken");
+
+        state.snooze(&p.id, Snooze::UntilActivity { after }, SnoozeMode::Hide);
+        assert!(!state.flags(&p, at("2026-09-26T00:00:00Z")).demoted);
     }
 
     #[test]
@@ -286,10 +347,25 @@ mod tests {
         assert_eq!(fresh.created_at, now());
 
         let mut state = LocalState::new(at("2026-09-01T00:00:00Z"));
-        state.snooze("PR_1", Snooze::UntilActivity { after: now() });
+        state.snooze(
+            "PR_1",
+            Snooze::UntilActivity { after: now() },
+            SnoozeMode::Hide,
+        );
+        state.snooze(
+            "PR_3",
+            Snooze::UntilActivity { after: now() },
+            SnoozeMode::Demote,
+        );
         state.mark_seen("PR_2", now());
         save(&path, &state).unwrap();
         assert_eq!(load(&path, now()).unwrap(), state);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text.matches("snooze_mode").count(),
+            1,
+            "hide is the default"
+        );
 
         std::fs::write(&path, "{broken").unwrap();
         assert!(load(&path, now()).is_err(), "don't silently drop snoozes");

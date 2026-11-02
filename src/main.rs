@@ -321,6 +321,7 @@ async fn list(global: &GlobalArgs, args: ListArgs) -> Result<()> {
         local: Some(&local),
     };
     prs.retain(|pr| setup.filter.shows(pr, &ctx));
+    local.mark_demoted(&mut prs, now);
     setup.sort.sort(&mut prs, &setup.config.score, now);
 
     let text = if args.output.json {

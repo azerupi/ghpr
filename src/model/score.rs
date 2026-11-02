@@ -58,29 +58,38 @@ pub fn breakdown(pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> Vec<(String
         }
     };
 
+    // What makes it urgent for you; a demoting snooze takes all of it back.
+    let mut urgency = 0;
+    let mut add_urgent = |label: String, points: i32| {
+        urgency += points;
+        add(label, points);
+    };
     let on_me = match pr.turn {
         Turn::Me => {
-            add("your turn".into(), weights.turn_me);
+            add_urgent("your turn".into(), weights.turn_me);
             true
         }
         Turn::Team => {
-            add("team's turn".into(), weights.turn_team);
+            add_urgent("team's turn".into(), weights.turn_team);
             true
         }
         Turn::Merge => {
-            add("ready to merge".into(), weights.turn_merge);
+            add_urgent("ready to merge".into(), weights.turn_merge);
             true
         }
         Turn::Queued | Turn::Author | Turn::Reviewers | Turn::Blocked => false,
     };
     if pr.mentions_me {
-        add("mentioned".into(), weights.mentioned);
+        add_urgent("mentioned".into(), weights.mentioned);
     }
     // Time spent waiting on someone else doesn't make it any more urgent for you.
     if on_me {
         let days = (now.as_second() - pr.waiting_since.as_second()).max(0) / 86_400;
         let days = days.min(weights.cap_waiting_days.max(0) as i64) as i32;
-        add(format!("waiting {days}d"), days * weights.waiting_per_day);
+        add_urgent(format!("waiting {days}d"), days * weights.waiting_per_day);
+    }
+    if pr.demoted {
+        add("snoozed".into(), -urgency);
     }
     if pr.additions + pr.deletions < weights.small_pr_lines {
         add("small".into(), weights.small_pr_bonus);
@@ -167,6 +176,16 @@ mod tests {
                 "{turn:?}: {parts:?}"
             );
         }
+    }
+
+    #[test]
+    fn demoting_snooze_takes_back_what_makes_it_urgent() {
+        let mut p = pr(1); // turn me, 50 lines, waiting 2d
+        p.mentions_me = true;
+        p.demoted = true;
+        let parts = breakdown(&p, &ScoreWeights::default(), now());
+        assert!(parts.contains(&("snoozed".into(), -140)), "{parts:?}");
+        assert_eq!(score(&p, &ScoreWeights::default(), now()), 15, "only small");
     }
 
     #[test]

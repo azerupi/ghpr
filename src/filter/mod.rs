@@ -10,7 +10,7 @@ use jiff::tz::TimeZone;
 
 use crate::glob::Glob;
 use crate::model::{CiState, Pr, ReviewDecision, ReviewState, Reviewer, Role, Turn};
-use crate::state::{Flags, LocalState};
+use crate::state::{Flags, LocalState, SnoozeMode};
 
 #[derive(Debug, Clone, Default)]
 pub struct Filter {
@@ -50,7 +50,8 @@ enum Pred {
     Bot,
     Mentioned,
     New,
-    Snoozed,
+    /// Any snooze if empty.
+    Snoozed(Vec<SnoozeMode>),
     Muted,
     /// Bare words: matched against title, branch, repo, and author; `#123` matches the number.
     Text(String),
@@ -163,7 +164,7 @@ pub struct Context<'a> {
 }
 
 impl Context<'_> {
-    fn flags(&self, pr: &Pr) -> Flags {
+    pub fn flags(&self, pr: &Pr) -> Flags {
         self.local
             .map_or_else(Flags::default, |s| s.flags(pr, self.now))
     }
@@ -186,7 +187,9 @@ impl Filter {
         let mentions = |p: fn(&Pred) -> bool| self.terms.iter().any(|t| p(&t.pred));
         let flags = ctx.flags(pr);
         self.matches(pr, ctx)
-            && (flags.snoozed.is_none() || mentions(|p| matches!(p, Pred::Snoozed)))
+            && (flags.snoozed.is_none()
+                || flags.demoted
+                || mentions(|p| matches!(p, Pred::Snoozed(_))))
             && (!flags.muted || mentions(|p| matches!(p, Pred::Muted)))
     }
 }
@@ -226,7 +229,12 @@ impl Pred {
             Pred::Label(globs) => pr.labels.iter().any(|l| globs.iter().any(|g| g.matches(l))),
             Pred::Base(globs) => globs.iter().any(|g| g.matches(&pr.base_ref)),
             Pred::Head(globs) => globs.iter().any(|g| g.matches(&pr.head_ref)),
-            Pred::Turn(turns) => turns.contains(&pr.turn),
+            // Moved down as not your turn: not `turn:me` (or team, merge) either.
+            Pred::Turn(turns) => {
+                turns.contains(&pr.turn)
+                    && !(matches!(pr.turn, Turn::Me | Turn::Team | Turn::Merge)
+                        && ctx.flags(pr).demoted)
+            }
             Pred::Last(roles) => {
                 let role = match pr.last_activity.as_ref().map(|a| a.role) {
                     Some(Role::Me) => LastRole::Me,
@@ -263,7 +271,15 @@ impl Pred {
             Pred::Bot => pr.author_is_bot,
             Pred::Mentioned => pr.mentions_me,
             Pred::New => ctx.flags(pr).new,
-            Pred::Snoozed => ctx.flags(pr).snoozed.is_some(),
+            Pred::Snoozed(modes) => {
+                let flags = ctx.flags(pr);
+                let mode = if flags.demoted {
+                    SnoozeMode::Demote
+                } else {
+                    SnoozeMode::Hide
+                };
+                flags.snoozed.is_some() && (modes.is_empty() || modes.contains(&mode))
+            }
             Pred::Muted => ctx.flags(pr).muted,
             Pred::Text(word) => {
                 if let Some(n) = word.strip_prefix('#').and_then(|n| n.parse::<u64>().ok()) {
@@ -624,13 +640,14 @@ mod tests {
 
     #[test]
     fn local_state_flags_and_default_hiding() {
-        use crate::state::Snooze;
+        use crate::state::{Snooze, SnoozeMode};
         let mut state = LocalState::new("2026-09-01T00:00:00Z".parse().unwrap());
         let (a, b, c) = (pr(1), pr(2), pr(3));
         state.mark_seen(&a.id, now());
         state.snooze(
             &b.id,
             Snooze::Until("2026-10-01T00:00:00Z".parse().unwrap()),
+            SnoozeMode::Hide,
         );
         state.set_muted(&c.id, true);
         let ctx = Context {
@@ -655,6 +672,31 @@ mod tests {
             "b and c are new but hidden"
         );
         assert_eq!(shown("new snoozed"), [2]);
+        assert_eq!(shown("snoozed:hidden"), [2]);
+        assert_eq!(shown("snoozed:demoted"), Vec::<u64>::new());
+
+        state.snooze(
+            &b.id,
+            Snooze::Until("2026-10-01T00:00:00Z".parse().unwrap()),
+            SnoozeMode::Demote,
+        );
+        let ctx = Context {
+            viewer: "me",
+            now: now(),
+            local: Some(&state),
+        };
+        let shown = |text: &str| -> Vec<u64> {
+            [&a, &b, &c]
+                .into_iter()
+                .filter(|p| parse(text).shows(p, &ctx))
+                .map(|p| p.number)
+                .collect()
+        };
+        assert_eq!(shown(""), [1, 2], "demoted stays listed");
+        assert_eq!(shown("snoozed:demoted"), [2]);
+        assert_eq!(shown("snoozed"), [2]);
+        assert_eq!(shown("turn:me"), [1], "demoted isn't your turn");
+        assert_eq!(shown("-turn:me"), [2]);
     }
 
     #[test]

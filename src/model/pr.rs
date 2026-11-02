@@ -48,6 +48,10 @@ pub struct Pr {
     pub mentions_me: bool,
     /// The latest activity by someone other than the viewer; drives the "new" marker.
     pub others_active_at: Option<Timestamp>,
+    /// Snoozed to stay listed but lower, from the local state (see
+    /// [`LocalState::mark_demoted`](crate::state::LocalState::mark_demoted)).
+    #[serde(skip)]
+    pub demoted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

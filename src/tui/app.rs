@@ -16,7 +16,7 @@ use crate::model::{Pr, ScoreWeights, Turn};
 use crate::notify::{self, Notice, Notifier};
 use crate::progress::Progress;
 use crate::sort::SortSpec;
-use crate::state::{Flags, LocalState, Snooze};
+use crate::state::{Flags, LocalState, Snooze, SnoozeMode};
 
 /// How long a transient status message stays visible.
 const FLASH_FOR: SignedDuration = SignedDuration::from_secs(4);
@@ -36,7 +36,6 @@ pub const TOGGLES: &[(char, &str, &str)] = &[
     ('d', "-draft", "hide drafts"),
     ('b', "-bot", "hide bots' PRs"),
     ('c', "-ci:fail", "hide failing CI"),
-    ('Z', "snoozed", "only snoozed"),
 ];
 
 /// Snooze choices: key, label, duration (`None`: until someone acts on the PR).
@@ -46,6 +45,15 @@ pub const SNOOZES: &[(char, &str, Option<SignedDuration>)] = &[
     ('w', "1 week", Some(SignedDuration::from_hours(7 * 24))),
     ('u', "until there's new activity", None),
 ];
+
+/// The snooze Enter picks: demoting is for "not my turn until they act",
+/// hiding for "not today".
+pub fn default_snooze(mode: SnoozeMode) -> char {
+    match mode {
+        SnoozeMode::Demote => 'u',
+        SnoozeMode::Hide => 'd',
+    }
+}
 
 /// How the app starts out; mostly from the config and command line.
 pub struct Settings {
@@ -162,7 +170,8 @@ pub struct App {
     pub profile: Option<String>,
     pub prompt: Option<Prompt>,
     /// The snooze choices are showing.
-    pub snoozing: bool,
+    /// The snooze picker is open, for this kind of snooze.
+    pub snoozing: Option<SnoozeMode>,
     /// The facets panel is open, with this row selected.
     pub facets: Option<usize>,
     pub show_detail: bool,
@@ -271,7 +280,7 @@ impl App {
             columns: settings.columns,
             profile: settings.profile,
             prompt: None,
-            snoozing: false,
+            snoozing: None,
             facets: None,
             show_detail: true,
             show_help: false,
@@ -334,7 +343,7 @@ impl App {
         self.tab()
             .prs
             .iter()
-            .filter(|pr| pr.turn == Turn::Me)
+            .filter(|pr| pr.turn == Turn::Me && !pr.demoted)
             .count()
     }
 
@@ -363,7 +372,7 @@ impl App {
                 self.prompt_key(key);
                 Vec::new()
             }
-            Msg::Key(key) if self.snoozing => self.snooze_key(key),
+            Msg::Key(key) if let Some(mode) = self.snoozing => self.snooze_key(key, mode),
             Msg::Key(key) if self.facets.is_some() => self.facet_key(key),
             Msg::Key(key) => self.key(key),
             Msg::Tick(now) => {
@@ -539,7 +548,8 @@ impl App {
             KeyCode::Char('f') => self.facets = Some(0),
             KeyCode::Char(' ') => return self.toggle_seen(),
             KeyCode::Char('N') => return self.mark_all_seen(),
-            KeyCode::Char('z') => return self.start_snooze(),
+            KeyCode::Char('z') => return self.start_snooze(SnoozeMode::Demote),
+            KeyCode::Char('Z') => return self.start_snooze(SnoozeMode::Hide),
             KeyCode::Char('M') => return self.toggle_mute(),
             _ => {}
         }
@@ -642,7 +652,8 @@ impl App {
         self.changed_state()
     }
 
-    fn start_snooze(&mut self) -> Vec<Cmd> {
+    /// Open the snooze picker, or wake the targets if they're all snoozed.
+    fn start_snooze(&mut self, mode: SnoozeMode) -> Vec<Cmd> {
         let targets = self.targets();
         if targets.is_empty() {
             return Vec::new();
@@ -656,14 +667,16 @@ impl App {
             self.tab_mut().marked.clear();
             return self.changed_state();
         }
-        self.snoozing = true;
+        self.snoozing = Some(mode);
         Vec::new()
     }
 
-    fn snooze_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
-        self.snoozing = false;
-        let KeyCode::Char(c) = key.code else {
-            return Vec::new();
+    fn snooze_key(&mut self, key: KeyEvent, mode: SnoozeMode) -> Vec<Cmd> {
+        self.snoozing = None;
+        let c = match key.code {
+            KeyCode::Char(c) => c,
+            KeyCode::Enter => default_snooze(mode),
+            _ => return Vec::new(),
         };
         let Some((_, label, duration)) = SNOOZES.iter().find(|(k, _, _)| *k == c) else {
             return Vec::new();
@@ -686,9 +699,12 @@ impl App {
         }
         let what = Self::describe(&self.targets());
         for (id, snooze) in snoozes {
-            self.state.snooze(&id, snooze);
+            self.state.snooze(&id, snooze, mode);
         }
-        self.flash(format!("snoozed {what} for {label} (Z shows snoozed)"));
+        self.flash(match mode {
+            SnoozeMode::Demote => format!("moved {what} down, {label}"),
+            SnoozeMode::Hide => format!("snoozed {what}, {label} (filter `snoozed` shows them)"),
+        });
         self.tab_mut().marked.clear();
         self.changed_state()
     }
@@ -1091,6 +1107,7 @@ impl App {
             local: Some(&self.state),
         };
         let tab = &mut self.tabs[index];
+        self.state.mark_demoted(&mut tab.all, self.now);
         let selected_id = tab.selected().map(|pr| pr.id.clone());
         let old_index = tab.table.selected().unwrap_or(0);
 
@@ -1232,7 +1249,7 @@ pub mod tests {
         assert!(app.update(char('o')).is_empty());
         assert!(app.update(char(' ')).is_empty());
         assert!(app.update(char('z')).is_empty());
-        assert!(!app.snoozing);
+        assert!(app.snoozing.is_none());
     }
 
     #[test]
@@ -1725,10 +1742,10 @@ pub mod tests {
     fn snoozing_hides_until_unsnoozed() {
         let mut app = app_with(3);
         app.update(char('j'));
-        assert!(app.update(char('z')).is_empty());
-        assert!(app.snoozing);
+        assert!(app.update(char('Z')).is_empty());
+        assert_eq!(app.snoozing, Some(SnoozeMode::Hide));
         assert!(saves_state(&app.update(char('w'))));
-        assert!(!app.snoozing);
+        assert!(app.snoozing.is_none());
         assert_eq!(shown(&app), [1, 3]);
         assert_eq!(
             selected_number(&app),
@@ -1737,18 +1754,43 @@ pub mod tests {
         );
         assert_eq!(app.hidden_count(), 1);
 
-        app.update(char('Z'));
+        app.update(char('/'));
+        typing(&mut app, "snoozed");
+        app.update(key(KeyCode::Enter));
         assert_eq!(shown(&app), [2]);
         app.update(char('z'));
-        assert!(!app.snoozing, "z on a snoozed PR unsnoozes it");
-        app.update(char('Z'));
+        assert!(app.snoozing.is_none(), "z on a snoozed PR unsnoozes it");
+        app.update(key(KeyCode::Esc));
         assert_eq!(shown(&app), [1, 2, 3]);
+    }
+
+    #[test]
+    fn demoting_keeps_it_listed_but_lower_until_someone_acts() {
+        let mut app = app_with(2);
+        app.tabs[0].sort = SortSpec::parse("score").unwrap();
+        let mut mentioned = pr(1);
+        mentioned.mentions_me = true;
+        app.update(fetched(vec![mentioned.clone(), pr(2)]));
+        assert_eq!(shown(&app), [1, 2]);
+        assert_eq!(app.my_turn_count(), 2);
+
+        app.update(char('z'));
+        assert_eq!(app.snoozing, Some(SnoozeMode::Demote));
+        app.update(key(KeyCode::Enter));
+        assert_eq!(shown(&app), [2, 1], "still listed, below");
+        assert_eq!(app.my_turn_count(), 1);
+        assert_eq!(app.hidden_count(), 0);
+
+        mentioned.others_active_at = Some(now());
+        app.update(fetched(vec![mentioned, pr(2)]));
+        assert_eq!(shown(&app), [1, 2], "back on top once they act");
+        assert_eq!(app.my_turn_count(), 2);
     }
 
     #[test]
     fn snooze_until_activity_wakes_up() {
         let mut app = app_with(2);
-        app.update(char('z'));
+        app.update(char('Z'));
         app.update(char('u'));
         assert_eq!(shown(&app), [2]);
         let mut active = pr(1);
@@ -1762,7 +1804,7 @@ pub mod tests {
         let mut app = app_with(2);
         app.update(char('z'));
         assert!(app.update(key(KeyCode::Esc)).is_empty());
-        assert!(!app.snoozing);
+        assert!(app.snoozing.is_none());
         assert_eq!(shown(&app), [1, 2]);
         assert!(!app.quit);
     }
@@ -1790,7 +1832,7 @@ pub mod tests {
             [Cmd::Copy(format!("{}\n{}", url(1), url(3)))]
         );
 
-        app.update(char('z'));
+        app.update(char('Z'));
         app.update(char('d'));
         assert_eq!(shown(&app), [2, 4], "both snoozed");
         assert!(

@@ -7,6 +7,7 @@ use jiff::tz::TimeZone;
 use super::{Cmp, Filter, LastRole, MergeCond, MineState, Pred, SizeClass, Term, TimeCond, User};
 use crate::glob::Glob;
 use crate::model::{CiState, MergeState, ReviewDecision, Turn};
+use crate::state::SnoozeMode;
 
 /// A `key:value` filter, for the parser's error messages and for completion.
 pub struct KeyInfo {
@@ -50,6 +51,7 @@ pub const KEYS: &[KeyInfo] = &[
     key("review", "review decision", ValueKind::Enum),
     key("mine", "your own review", ValueKind::Enum),
     key("last", "who acted last", ValueKind::Enum),
+    key("snoozed", "how it's snoozed", ValueKind::Enum),
     key(
         "waiting",
         "time in its current turn (>2d, <3h, 1d..1w)",
@@ -87,7 +89,10 @@ pub const FLAGS: &[(&str, &str)] = &[
     ("bot", "PRs opened by bots"),
     ("mentioned", "PRs that mention you"),
     ("new", "activity since you last looked"),
-    ("snoozed", "snoozed PRs (hidden otherwise)"),
+    (
+        "snoozed",
+        "snoozed PRs (hidden ones aren't shown otherwise)",
+    ),
     ("muted", "muted PRs (hidden otherwise)"),
 ];
 
@@ -103,6 +108,7 @@ pub fn enum_values(key: &str) -> Option<Vec<(&'static str, &'static str)>> {
         "merge" => names(MERGE),
         "review" => names(REVIEW),
         "mine" => names(MINE),
+        "snoozed" => names(SNOOZED),
         _ => return None,
     })
 }
@@ -156,7 +162,7 @@ fn term(token: &str, tz: &TimeZone) -> Result<Term, String> {
             "bot" => Pred::Bot,
             "mentioned" => Pred::Mentioned,
             "new" => Pred::New,
-            "snoozed" => Pred::Snoozed,
+            "snoozed" => Pred::Snoozed(Vec::new()),
             "muted" => Pred::Muted,
             _ => Pred::Text(body.to_lowercase()),
         },
@@ -187,6 +193,7 @@ fn key_value(key: &str, value: &str, tz: &TimeZone) -> Result<Pred, String> {
         "merge" => Pred::Merge(one_of(key, values(), MERGE)?),
         "review" => Pred::Review(one_of(key, values(), REVIEW)?),
         "mine" => Pred::Mine(one_of(key, values(), MINE)?),
+        "snoozed" => Pred::Snoozed(one_of(key, values(), SNOOZED)?),
         "age" => Pred::Age(
             values()
                 .map(|v| time_cond(key, v, tz))
@@ -297,6 +304,14 @@ const MERGE: &[(&str, MergeCond, &str)] = &[
         "not computed yet",
     ),
     ("queued", MergeCond::Queued, "in the merge queue"),
+];
+const SNOOZED: &[(&str, SnoozeMode, &str)] = &[
+    ("hidden", SnoozeMode::Hide, "snoozed out of the list (Z)"),
+    (
+        "demoted",
+        SnoozeMode::Demote,
+        "moved down, not your turn (z)",
+    ),
 ];
 const MINE: &[(&str, MineState, &str)] = &[
     ("unreviewed", MineState::Unreviewed, "you haven't reviewed"),

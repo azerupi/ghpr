@@ -108,7 +108,8 @@ turn:me -draft waiting:>2d repo:acme/* label:"needs review" ci:fail,pending
 - Keys: `turn`, `repo`, `org`, `author`, `reviewer`, `team`, `label`, `ci`,
   `merge` (`clean`, `unstable`, `behind`, `blocked`, `conflict`, `unknown`, `queued`),
   `review`, `mine` (`unreviewed`, `stale`, `approved`, `changes`, `commented`),
-  `last`, `waiting`, `updated`, `age`, `size`, `files`, `threads`, `base`, `head`.
+  `last`, `snoozed` (`hidden`, `demoted`), `waiting`, `updated`, `age`, `size`,
+  `files`, `threads`, `base`, `head`.
 - Flags: `draft`, `conflict`, `bot`, `mentioned`, `new`, `snoozed`, `muted`.
 - Times: `>2d`, `<3h`, `1d..1w`, or dates like `2026-09-01..2026-09-20`.
 - Sizes: `<100`, `100..400`, or `xs`, `s`, `m`, `l`, `xl`.
@@ -116,7 +117,7 @@ turn:me -draft waiting:>2d repo:acme/* label:"needs review" ci:fail,pending
 - `@me` is you.
 
 One-key toggles: `m` my turn, `n` new, `d` hide drafts, `b` hide bots, `c` hide
-failing CI, `Z` snoozed. `f` opens a **facets** panel with counts per turn,
+failing CI. `f` opens a **facets** panel with counts per turn,
 repo, author, label, CI, and review: Space includes a value, `x` excludes it.
 
 ## Sorting and the score
@@ -133,10 +134,15 @@ the breakdown; all weights are configurable.
 
 - **New** (★): someone other than you acted since you last looked. Opening a
   PR (`o`) or Space marks it seen; `N` marks everything shown as seen.
-- **Snooze** (`z`): hide for a day, 3 days, a week, or until there's new
-  activity. `z` again wakes it.
+- **Snooze** for a day, 3 days, a week, or until there's new activity (Enter
+  picks the usual one). Either key again wakes it.
+  - `z` moves it down, for "I know it's not my turn": it stays listed (dimmed,
+    `↓`) but loses its turn, mention, and waiting points, and doesn't count,
+    filter (`turn:me`), or notify as your turn. Enter: until someone else acts.
+  - `Z` hides it. Enter: for a day.
 - **Mute** (`M`): hide until unmuted.
-- Snoozed and muted PRs stay hidden unless the filter mentions `snoozed` or `muted`.
+- Hidden snoozed and muted PRs stay hidden unless the filter mentions `snoozed`
+  or `muted`.
 - `v` marks rows and `V` marks all; opening, copying, seen, snooze, and mute
   then apply to every marked row.
 
@@ -153,7 +159,8 @@ refreshing in the background while you look at other tabs.
 
 Each thing is announced once: a turn that flickers, or a PR that drops out
 of a search and comes back, doesn't notify again, but a new request or reply
-does. Snoozed and muted PRs never notify, nothing is announced for what was
+does. Snoozed and muted PRs never notify (moved-down ones still do for
+conflicts and the merge queue), nothing is announced for what was
 already there when ghpr started, and more than three at once become one
 summary. Notifications also flash in the status bar.
 
@@ -183,7 +190,8 @@ events = ["my_turn", "queue"]   # also: team, ready_to_merge, conflict, merged, 
 | Enter, Tab | toggle the detail pane |
 | `/`, `s`, `S`, `1`–`9` | filter, sort |
 | `f` | facets |
-| Space, `N`, `z`, `M`, `v`, `V` | seen, all seen, snooze, mute, mark, mark all |
+| Space, `N`, `M`, `v`, `V` | seen, all seen, mute, mark, mark all |
+| `z` / `Z` | snooze: move down / hide |
 | `[`, `]`, Alt-1..9 | switch views |
 | `r` | refresh now |
 | Esc | clear marks, then the filter |

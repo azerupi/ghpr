@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, PromptKind, SNOOZES, Tab};
+use super::app::{App, PromptKind, SNOOZES, Tab, default_snooze};
 use crate::columns::{self, Column};
 use crate::filter::Mark;
 use crate::model::{
@@ -15,7 +15,7 @@ use crate::model::{
 use crate::model::{ScoreWeights, breakdown};
 use crate::output::{age, span};
 use crate::progress::{STALL_SECS, elapsed};
-use crate::state::{Flags, Snooze};
+use crate::state::{Flags, Snooze, SnoozeMode};
 
 /// Waiting longer than this is highlighted in yellow, then red.
 const WAIT_WARN_SECS: i64 = 2 * 86_400;
@@ -52,8 +52,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     render_status(frame, app, status);
     render_menu(frame, app, status);
-    if app.snoozing {
-        render_snooze(frame);
+    if let Some(mode) = app.snoozing {
+        render_snooze(frame, mode);
     }
     if app.show_help {
         render_help(frame);
@@ -204,8 +204,8 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
             );
             let row = Row::new(cells.collect::<Vec<_>>());
             let row = match pr.turn {
+                _ if pr.demoted || pr.is_draft => row.dark_gray(),
                 Turn::Me => row.bold(),
-                _ if pr.is_draft => row.dark_gray(),
                 _ => row,
             };
             if tab.marked.contains(&pr.id) {
@@ -238,6 +238,8 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
 fn marker(flags: Flags) -> Span<'static> {
     if flags.muted {
         "m".dark_gray()
+    } else if flags.demoted {
+        "↓".dark_gray()
     } else if flags.snoozed.is_some() {
         "z".dark_gray()
     } else if flags.new {
@@ -418,12 +420,17 @@ fn render_detail(
     if flags.new {
         turn_line.push(" · ★ new since you last looked".yellow());
     }
+    let snoozed = if flags.demoted {
+        "moved down"
+    } else {
+        "snoozed"
+    };
     match flags.snoozed {
         Some(Snooze::Until(until)) => {
-            turn_line.push(dim(format!(" · snoozed for {} more", age(until, now))));
+            turn_line.push(dim(format!(" · {snoozed} for {} more", age(until, now))));
         }
         Some(Snooze::UntilActivity { .. }) => {
-            turn_line.push(dim(" · snoozed until there's new activity".to_owned()));
+            turn_line.push(dim(format!(" · {snoozed} until there's new activity")));
         }
         None => {}
     }
@@ -637,16 +644,27 @@ fn spinner(now: Timestamp) -> char {
 }
 
 /// Key, description. An empty key starts a new section titled by the description.
-fn render_snooze(frame: &mut Frame) {
+fn render_snooze(frame: &mut Frame, mode: SnoozeMode) {
+    let default = default_snooze(mode);
     let mut lines: Vec<Line> = SNOOZES
         .iter()
-        .map(|(key, label, _)| Line::from(vec![format!("  {key}  ").cyan(), Span::raw(*label)]))
+        .map(|(key, label, _)| {
+            let mut line = vec![format!("  {key}  ").cyan(), Span::raw(*label)];
+            if *key == default {
+                line.push(" (Enter)".dark_gray());
+            }
+            Line::from(line)
+        })
         .collect();
     lines.push(Line::from("  any other key cancels".dark_gray()));
-    let area = centered(frame.area(), 36, lines.len() as u16 + 2);
+    let title = match mode {
+        SnoozeMode::Demote => " Move down, not your turn ",
+        SnoozeMode::Hide => " Snooze: hide ",
+    };
+    let area = centered(frame.area(), 46, lines.len() as u16 + 2);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(" Snooze ".bold())),
+        Paragraph::new(lines).block(Block::bordered().title(title.bold())),
         area,
     );
 }
@@ -744,16 +762,13 @@ const HELP: &[(&str, &str)] = &[
     ("[ ] Alt-1..9", "previous / next view, or view N"),
     ("", "Keep track"),
     ("Space / N", "mark seen (again: unseen) / all seen"),
-    ("z", "snooze (again: wake up)"),
+    ("z / Z", "snooze: move down / hide (again: wake up)"),
     ("M", "mute / unmute"),
     ("", "Filter & sort"),
     ("/", "filter (Enter keeps, Esc undoes)"),
     ("Tab / →", "complete; Tab again cycles the menu"),
     ("Esc", "clear marked rows, then the filter"),
-    (
-        "m n d b c Z",
-        "toggle: my turn, new, -draft, -bot, -ci:fail, snoozed",
-    ),
+    ("m n d b c", "toggle: my turn, new, -draft, -bot, -ci:fail"),
     ("s / S", "sort keys / reverse"),
     ("1-9", "sort by the Nth column (again: reverse)"),
     ("", "Filter syntax: key:value, -negate, a,b = either"),
@@ -770,6 +785,7 @@ const HELP: &[(&str, &str)] = &[
         "<100 >=5 10..50; size:xs,s,m,l,xl; also threads",
     ),
     ("flags", "draft conflict bot mentioned new snoozed muted"),
+    ("snoozed", "snoozed:hidden snoozed:demoted"),
     ("words", "title/branch/repo/author; #123"),
     ("", ""),
     ("?  q", "this help · quit"),

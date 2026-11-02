@@ -143,6 +143,7 @@ pub fn build_pr(raw: RawPr, detail: Option<RawPrDetail>, viewer: &Viewer) -> Res
         waiting_since: derived.waiting_since,
         mentions_me: derived.mentions_me,
         others_active_at: derived.others_active_at,
+        demoted: false,
     })
 }
 

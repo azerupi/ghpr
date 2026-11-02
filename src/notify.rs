@@ -172,7 +172,10 @@ impl Notifier {
                 }
             }
             let since = pr.waiting_since.as_second();
+            // Moved down as not your turn: nothing to announce until it wakes.
+            let demoted = ctx.flags(pr).demoted;
             match pr.turn {
+                _ if demoted => {}
                 Turn::Me => candidates.push((
                     (Event::MyTurn, since),
                     notice("Your turn", pr, &reason(pr, ctx.viewer), false),
@@ -410,7 +413,7 @@ pub fn send(notice: &Notice) -> Result<()> {
 mod tests {
     use super::*;
     use crate::model::{CiState, Role};
-    use crate::state::{LocalState, Snooze};
+    use crate::state::{LocalState, Snooze, SnoozeMode};
     use crate::test_support::{now, pr};
 
     fn ctx(state: &LocalState) -> Context<'_> {
@@ -502,12 +505,29 @@ mod tests {
     }
 
     #[test]
+    fn demoted_prs_dont_announce_their_turn() {
+        let mut state = LocalState::new(now());
+        state.snooze(
+            "PR_1",
+            Snooze::UntilActivity {
+                after: pr(1).others_active_at.unwrap(),
+            },
+            SnoozeMode::Demote,
+        );
+        let mut n = notifier(&[Event::MyTurn]);
+        n.refresh(&[], &ctx(&state));
+        let (notices, _) = n.refresh(&[pr(1), pr(2)], &ctx(&state));
+        assert_eq!(titles(&notices), ["Your turn · acme/api#2"]);
+    }
+
+    #[test]
     fn snoozed_and_muted_prs_stay_quiet() {
         let mut state = LocalState::new(now());
         state.set_muted("PR_1", true);
         state.snooze(
             "PR_2",
             Snooze::Until(now() + jiff::SignedDuration::from_hours(24)),
+            SnoozeMode::Hide,
         );
         let mut n = notifier(&[Event::MyTurn]);
         n.refresh(&[], &ctx(&state));
