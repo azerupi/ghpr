@@ -95,6 +95,8 @@ pub struct Tab {
     pub prs: Vec<Pr>,
     pub table: TableState,
     pub filter_text: String,
+    /// The view's own filter, which `filter_text` starts as and can leave.
+    view_filter: String,
     filter: Filter,
     pub sort: SortSpec,
     /// When the data was fetched from GitHub.
@@ -123,6 +125,7 @@ impl Tab {
             all: Vec::new(),
             prs: Vec::new(),
             table: TableState::default(),
+            view_filter: settings.filter.clone(),
             filter_text: settings.filter,
             sort: settings.sort,
             fetched_at: None,
@@ -185,6 +188,8 @@ pub struct App {
     refresh_interval: SignedDuration,
     /// The notifying tab and what it has announced.
     notifier: Option<(usize, Notifier)>,
+    /// What the notifier announces, kept for moving it to another tab.
+    notify_events: Vec<notify::Event>,
     /// This instance holds the notify lock: with several ghprs open for a
     /// profile, only one notifies.
     notifying: bool,
@@ -267,6 +272,10 @@ pub enum Cmd {
 impl App {
     pub fn new(settings: Settings, now: Timestamp) -> Self {
         let tabs: Vec<Tab> = settings.tabs.into_iter().map(Tab::new).collect();
+        let notify_events = settings.notify.as_ref().map_or_else(
+            || notify::DEFAULT_EVENTS.to_vec(),
+            |n| n.events.clone(),
+        );
         let notifier = settings.notify.filter(|n| n.tab < tabs.len()).map(|n| {
             let filter = Filter::parse(&n.filter).unwrap_or_default();
             (n.tab, Notifier::new(n.events, filter))
@@ -291,6 +300,7 @@ impl App {
             quit: false,
             refresh_interval: settings.refresh_interval,
             notifier,
+            notify_events,
             notifying: false,
             lock_attempt: None,
             switched_at: None,
@@ -551,6 +561,7 @@ impl App {
             KeyCode::Char('z') => return self.start_snooze(SnoozeMode::Demote),
             KeyCode::Char('Z') => return self.start_snooze(SnoozeMode::Hide),
             KeyCode::Char('M') => return self.toggle_mute(),
+            KeyCode::Char('B') => self.notify_from_here(),
             _ => {}
         }
         Vec::new()
@@ -1027,11 +1038,29 @@ impl App {
     // --- Notifications ---
 
     /// The tab that notifies, if this instance is the one notifying.
-    fn notify_tab(&self) -> Option<usize> {
+    /// Which tab's refreshes notify, if this instance is the one notifying.
+    pub fn notify_tab(&self) -> Option<usize> {
         self.notifier
             .as_ref()
             .filter(|_| self.notifying)
             .map(|(tab, _)| *tab)
+    }
+
+    /// Make the active tab the one that notifies, for this session. Its own
+    /// view filter decides what counts, and the notifier starts over.
+    fn notify_from_here(&mut self) {
+        if self.offline {
+            self.flash("offline: no notifications".to_owned());
+            return;
+        }
+        let tab = self.active;
+        if self.notifier.as_ref().is_some_and(|(t, _)| *t == tab) {
+            self.flash(format!("{} already notifies", self.tabs[tab].view_name));
+            return;
+        }
+        let filter = Filter::parse(&self.tabs[tab].view_filter).unwrap_or_default();
+        self.notifier = Some((tab, Notifier::new(self.notify_events.clone(), filter)));
+        self.flash(format!("🔔 notifying from {}", self.tabs[tab].view_name));
     }
 
     /// Ask for the notify lock, unless it's held or was asked for recently.
@@ -1722,6 +1751,22 @@ pub mod tests {
         assert_eq!(app.update(later), [Cmd::Fetch(0)]);
     }
 
+    #[test]
+    fn visited_tabs_do_not_refresh_while_hidden() {
+        let mut app = tabbed();
+        let tick = |ms| Msg::Tick(now() + SignedDuration::from_millis(ms));
+        app.init();
+        app.update(fetched_for(0, vec![pr(1)]));
+        app.update(char(']'));
+        assert_eq!(app.update(tick(500)), [Cmd::Fetch(1)]);
+        app.update(fetched_for(1, vec![pr(1)]));
+        app.update(char('['));
+        app.update(tick(1000));
+        // Long past the interval, sitting on tab 0: only it refreshes.
+        let later = Msg::Tick(now() + SignedDuration::from_mins(10));
+        assert_eq!(app.update(later), [Cmd::Fetch(0)]);
+    }
+
     // --- Seen, snoozed, muted ---
 
     #[test]
@@ -2030,6 +2075,33 @@ pub mod tests {
         app.update(fetched_for(1, vec![]));
         let later = Msg::Tick(now() + SignedDuration::from_mins(5));
         assert_eq!(app.update(later), [Cmd::Fetch(1), Cmd::Fetch(0)]);
+    }
+
+    #[test]
+    fn b_moves_notifications_to_the_active_tab() {
+        let mut app = notifying(&["for-me", "mine"], 1);
+        assert_eq!(app.notify_tab(), Some(0));
+        app.update(fetched_for(0, vec![]));
+        app.update(fetched_for(1, vec![]));
+        app.update(char('B'));
+        assert_eq!(app.notify_tab(), Some(1));
+        app.update(char('['));
+        let later = Msg::Tick(now() + SignedDuration::from_mins(5));
+        assert_eq!(
+            app.update(later),
+            [Cmd::Fetch(0), Cmd::Fetch(1)],
+            "mine refreshes while hidden now"
+        );
+    }
+
+    #[test]
+    fn b_turns_notifications_on_when_there_were_none() {
+        let mut app = App::new(settings_with(&["for-me", "mine"], false), now());
+        assert_eq!(app.notify_tab(), None);
+        app.update(char('B'));
+        assert!(app.update(Msg::Tick(now())).contains(&Cmd::TryNotifyLock));
+        app.update(Msg::NotifyLock(true));
+        assert_eq!(app.notify_tab(), Some(0));
     }
 
     #[test]

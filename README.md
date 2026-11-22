@@ -180,7 +180,9 @@ Linux, Notification Center on macOS) when a refresh brings news: by default,
 a PR became your turn (a review request, a reply to your review, a mention,
 CI breaking on your PR, ...) or one of your PRs left the merge queue, merged
 or removed. The default view (`for-me`) does the notifying, and keeps
-refreshing in the background while you look at other tabs.
+refreshing in the background while you look at other tabs (quietly: no
+spinner). It's marked with a 🔔 in the tab bar. `B` moves the notifying to the
+active tab, until you quit; it uses that view's own filter and starts afresh.
 
 Each thing is announced once: a turn that flickers, or a PR that drops out
 of a search and comes back, doesn't notify again, but a new request or reply
@@ -217,6 +219,7 @@ events = ["my_turn", "queue"]   # also: team, ready_to_merge, conflict, merged, 
 | `f` | facets |
 | Space, `N`, `M`, `v`, `V` | seen, all seen, mute, mark, mark all |
 | `z` / `Z` | snooze: move down / hide |
+| `B` | notify from this tab (this session) |
 | `[`, `]`, Alt-1..9 | switch views |
 | `r` | refresh now |
 | Esc | clear marks, then the filter |

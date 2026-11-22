@@ -69,12 +69,16 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         tabs.push(format!(" {profile} ").black().on_cyan());
     }
     tabs.push(Span::raw(" "));
+    let bell = app.notify_tab();
     for (i, tab) in app.tabs.iter().enumerate() {
-        let name = if tab.refreshing {
-            format!(" {} {} ", spinner(app.now), tab.view_name)
+        // Only the tab on screen shows a spinner; the others refresh quietly.
+        let spin = if tab.refreshing && i == app.active {
+            format!("{} ", spinner(app.now))
         } else {
-            format!(" {} ", tab.view_name)
+            String::new()
         };
+        let ring = if bell == Some(i) { " 🔔" } else { "" };
+        let name = format!(" {spin}{}{ring} ", tab.view_name);
         tabs.push(if i == app.active {
             name.bold().reversed()
         } else {
@@ -796,6 +800,7 @@ const HELP: &[(&str, &str)] = &[
     ("Space / N", "mark seen (again: unseen) / all seen"),
     ("z / Z", "snooze: move down / hide (again: wake up)"),
     ("M", "mute / unmute"),
+    ("B", "notify from this tab (until you quit)"),
     ("", "Filter & sort"),
     ("/", "filter (Enter keeps, Esc undoes)"),
     ("Tab / →", "complete; Tab again cycles the menu"),
@@ -902,6 +907,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use jiff::SignedDuration;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -909,6 +915,7 @@ mod tests {
     use super::*;
     use crate::model::{MyReview, Role};
     use crate::test_support::{now, pr, pr_titled};
+    use crate::tui::Msg;
     use crate::tui::app::tests::{settings, settings_with};
 
     fn draw(app: &mut App, width: u16, height: u16) -> String {
@@ -1099,6 +1106,18 @@ mod tests {
         app.profile = Some("work".into());
         let tabs = draw(&mut app, 100, 16).lines().next().unwrap().to_owned();
         assert!(tabs.starts_with("\" ghpr  work   for-me "), "{tabs}");
+    }
+
+    #[test]
+    fn only_the_active_tab_shows_a_spinner_and_the_bell_marks_the_notifier() {
+        let mut app = App::new(settings_with(&["for-me", "mine"], false), now());
+        app.update(Msg::Key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE)));
+        app.update(Msg::NotifyLock(true));
+        app.update(Msg::Tick(now())); // for-me is active and starts refreshing
+        app.update(Msg::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)));
+        let tabs_line = draw(&mut app, 100, 10).lines().next().unwrap().to_owned();
+        assert!(tabs_line.contains("for-me 🔔"), "{tabs_line}");
+        assert!(!tabs_line.contains('⠋') && !tabs_line.contains('⠙'), "{tabs_line}");
     }
 
     #[test]
