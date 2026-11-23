@@ -9,9 +9,22 @@ const DEFAULT_VIEW: &str = "for-me";
 const BUILTIN_VIEWS: &[&str] = &["for-me", "mine", "repo", "org"];
 const OPEN_PRS: &[&str] = &["is:pr", "is:open", "archived:false"];
 
+/// What every PR in a view has in common, so the table can leave it out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Scope {
+    #[default]
+    Mixed,
+    /// The current repository (and its upstream, in a fork): no REPO column
+    /// while the PRs shown all belong to one repo.
+    Repo,
+    /// A single organization: repos show without the owner.
+    Org,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct View {
     pub name: String,
+    pub scope: Scope,
     pub searches: Vec<Search>,
     /// Initial client-side filter.
     pub filter: String,
@@ -70,6 +83,7 @@ pub fn resolve(
         }
         return Ok(View {
             name,
+            scope: Scope::Mixed,
             searches: vec![search(&terms.join(" "), repos, Keep::All)],
             filter: view.filter.clone(),
             sort: view.sort.clone().unwrap_or_else(|| "score".to_owned()),
@@ -77,6 +91,7 @@ pub fn resolve(
     }
 
     let open = OPEN_PRS.join(" ");
+    let mut scope = Scope::Mixed;
     let (searches, filter, sort) = match name.as_str() {
         "for-me" => {
             // GitHub drops you from the requested reviewers once you review, so
@@ -120,6 +135,7 @@ pub fn resolve(
             } else {
                 repos.to_vec()
             };
+            scope = Scope::Repo;
             (
                 vec![search(
                     &format!("{open} sort:updated-desc"),
@@ -147,6 +163,9 @@ pub fn resolve(
                 }
                 owners
             };
+            if owners.len() == 1 {
+                scope = Scope::Org;
+            }
             let mut query = format!("{open} sort:updated-desc");
             for owner in &owners {
                 query.push_str(&format!(" org:{owner}"));
@@ -172,6 +191,7 @@ pub fn resolve(
 
     Ok(View {
         name,
+        scope,
         searches,
         filter: filter.to_owned(),
         sort: sort.to_owned(),
@@ -293,6 +313,21 @@ mod tests {
         );
         let err = resolve(Some("org"), &[], &Config::default(), no_repo).unwrap_err();
         assert!(err.to_string().contains("-R"), "{err}");
+    }
+
+    #[test]
+    fn scope_says_what_the_prs_share() {
+        let one = [repo("acme/api")];
+        let scope = |name, repos: &[RepoName]| {
+            resolve(Some(name), repos, &Config::default(), || vec![repo("o/r")])
+                .unwrap()
+                .scope
+        };
+        assert_eq!(scope("repo", &one), Scope::Repo);
+        assert_eq!(scope("repo", &[repo("a/x"), repo("b/y")]), Scope::Repo);
+        assert_eq!(scope("org", &[]), Scope::Org);
+        assert_eq!(scope("org", &[repo("a/x"), repo("b/y")]), Scope::Mixed);
+        assert_eq!(scope("for-me", &[]), Scope::Mixed);
     }
 
     #[test]

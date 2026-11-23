@@ -227,9 +227,71 @@ pub fn fit(columns: &[Column], widths: &[usize], width: usize, spacing: usize) -
     keep
 }
 
+/// How much room the title should have before the clippable columns give up
+/// some of theirs.
+const COMFORT_TITLE_WIDTH: usize = 30;
+
+/// How narrow a column can be clipped to (with a `…`), if any.
+fn clip_floor(column: Column, width: usize) -> usize {
+    match column {
+        Column::Turn => width.min(6),
+        Column::Author => width.min(8),
+        _ => width,
+    }
+}
+
+/// Like [`fit`], but turn and author are clipped before any column is
+/// dropped, and only as far as the title needs. Returns which columns to
+/// show and the width of each.
+pub fn fit_clipping(
+    columns: &[Column],
+    widths: &[usize],
+    width: usize,
+    spacing: usize,
+) -> (Vec<bool>, Vec<usize>) {
+    let floors: Vec<usize> = columns
+        .iter()
+        .zip(widths)
+        .map(|(c, w)| clip_floor(*c, *w))
+        .collect();
+    let keep = fit(columns, &floors, width, spacing);
+    let mut out = widths.to_vec();
+    let shown = keep.iter().filter(|k| **k).count();
+    let others: usize = (0..columns.len())
+        .filter(|&i| keep[i] && columns[i] != Column::Title)
+        .map(|i| out[i])
+        .sum();
+    let room = width.saturating_sub(others + spacing * shown.saturating_sub(1));
+    let wanted = columns
+        .iter()
+        .position(|c| *c == Column::Title)
+        .map_or(0, |i| widths[i].min(COMFORT_TITLE_WIDTH));
+    let mut deficit = wanted.saturating_sub(room);
+    for target in [Column::Author, Column::Turn] {
+        for i in (0..columns.len()).filter(|&i| keep[i] && columns[i] == target) {
+            let cut = deficit.min(out[i] - floors[i]);
+            out[i] -= cut;
+            deficit -= cut;
+        }
+    }
+    (keep, out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clips_author_then_turn_before_dropping_columns() {
+        let columns = DEFAULT;
+        // turn status repo # title author size wait last
+        let widths = [9, 4, 20, 5, 60, 14, 10, 4, 8];
+        let (keep, out) = fit_clipping(columns, &widths, 120, 3);
+        assert!(keep.iter().all(|k| *k), "everything still fits clipped");
+        assert!(out[5] < 14 && out[5] >= 8, "author clipped first: {out:?}");
+        let (_, roomy) = fit_clipping(columns, &widths, 200, 3);
+        assert_eq!(roomy, widths, "nothing clipped when there's room");
+    }
 
     #[test]
     fn names_round_trip() {

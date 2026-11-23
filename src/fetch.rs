@@ -263,6 +263,7 @@ mod tests {
         fn view() -> View {
             View {
                 name: "repo".to_owned(),
+                scope: Default::default(),
                 searches: vec![Search {
                     query: QUERY.to_owned(),
                     keep: Keep::All,

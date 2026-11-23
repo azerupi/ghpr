@@ -16,6 +16,7 @@ use crate::model::{ScoreWeights, Tone, breakdown, slots};
 use crate::output::{age, span};
 use crate::progress::{STALL_SECS, elapsed};
 use crate::state::{Flags, Snooze, SnoozeMode};
+use crate::views::Scope;
 
 /// Waiting longer than this is highlighted in yellow, then red.
 const WAIT_WARN_SECS: i64 = 2 * 86_400;
@@ -159,9 +160,18 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // Content widths, capped for columns whose values can get long.
-    let widths: Vec<usize> = app
+    // A single-repo view says nothing new in the REPO column.
+    let scope = tab.scope;
+    // In a fork the view covers two repos, so look at what's actually shown.
+    let one_repo = tab.prs.windows(2).all(|w| w[0].repo == w[1].repo);
+    let columns: Vec<Column> = app
         .columns
+        .iter()
+        .copied()
+        .filter(|c| !(scope == Scope::Repo && one_repo && *c == Column::Repo))
+        .collect();
+    // Content widths, capped for columns whose values can get long.
+    let widths: Vec<usize> = columns
         .iter()
         .map(|&column| {
             let cap = match column {
@@ -173,7 +183,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             tab.prs
                 .iter()
-                .map(|pr| column.text(pr, &app.weights, app.now).width())
+                .map(|pr| column_text(column, pr, scope, &app.weights, app.now).width())
                 .chain([column.header().width()])
                 .max()
                 .unwrap_or(0)
@@ -181,14 +191,13 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     // The marker column and its spacing take two characters.
-    let keep = columns::fit(
-        &app.columns,
+    let (keep, widths) = columns::fit_clipping(
+        &columns,
         &widths,
         (area.width as usize).saturating_sub(2),
-        1,
+        COLUMN_GAP,
     );
-    let shown: Vec<(Column, usize)> = app
-        .columns
+    let shown: Vec<(Column, usize)> = columns
         .iter()
         .zip(&widths)
         .zip(&keep)
@@ -201,11 +210,12 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|pr| {
             let flags = app.flags(pr);
-            let cells = std::iter::once(Cell::from(marker(flags))).chain(
+            let cells = std::iter::once(Cell::from(marker(flags))).chain(with_borders(
                 shown
                     .iter()
-                    .map(|(column, _)| cell(*column, pr, &app.weights, app.now)),
-            );
+                    .map(|(column, width)| cell(*column, *width, pr, scope, &app.weights, app.now)),
+                border_cell,
+            ));
             let row = Row::new(cells.collect::<Vec<_>>());
             let row = match pr.turn {
                 _ if pr.demoted || pr.is_draft => row.dark_gray(),
@@ -220,22 +230,53 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     let header = Row::new(
-        std::iter::once("")
-            .chain(shown.iter().map(|(c, _)| c.header()))
+        std::iter::once(Cell::default())
+            .chain(with_borders(
+                shown.iter().map(|(c, _)| match c {
+                    // Its cells are two numbers side by side; a left-aligned
+                    // title looks like it belongs to the first one.
+                    Column::Size => Cell::from(Line::from(c.header()).centered()),
+                    _ => Cell::from(c.header()),
+                }),
+                border_cell,
+            ))
             .collect::<Vec<_>>(),
     )
     .style(Style::new().bold().underlined());
     let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(1))
-        .chain(shown.iter().map(|(column, width)| match column {
-            Column::Title => Constraint::Fill(1),
-            _ => Constraint::Length(*width as u16),
-        }))
+        .chain(with_borders(
+            shown.iter().map(|(column, width)| match column {
+                Column::Title => Constraint::Fill(1),
+                _ => Constraint::Length(*width as u16),
+            }),
+            || Constraint::Length(1),
+        ))
         .collect();
     let table = Table::new(rows, constraints)
         .header(header)
         .column_spacing(1)
         .row_highlight_style(Style::new().bg(Color::Indexed(237)));
     frame.render_stateful_widget(table, area, &mut app.tabs[active].table);
+}
+
+/// Space between two columns: a faint border with a space on each side.
+const COLUMN_GAP: usize = 3;
+
+/// Put a border between neighbouring columns. The table's own spacing of 1
+/// goes on both sides of it, which makes [`COLUMN_GAP`].
+fn with_borders<T>(items: impl Iterator<Item = T>, border: impl Fn() -> T) -> Vec<T> {
+    let mut out = Vec::new();
+    for (i, item) in items.enumerate() {
+        if i > 0 {
+            out.push(border());
+        }
+        out.push(item);
+    }
+    out
+}
+
+fn border_cell() -> Cell<'static> {
+    Cell::from("│".dark_gray())
 }
 
 /// A one-character marker for the PR's local state.
@@ -254,9 +295,20 @@ fn marker(flags: Flags) -> Span<'static> {
 }
 
 /// One styled cell.
-fn cell(column: Column, pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> Cell<'static> {
+fn cell(
+    column: Column,
+    width: usize,
+    pr: &Pr,
+    scope: Scope,
+    weights: &ScoreWeights,
+    now: Timestamp,
+) -> Cell<'static> {
     match column {
-        Column::Turn => Cell::from(Span::styled(pr.turn.label(), turn_style(pr.turn))),
+        Column::Turn => Cell::from(Span::styled(
+            clip(pr.turn.label(), width),
+            turn_style(pr.turn),
+        )),
+        Column::Author => Cell::from(clip(&column.text(pr, weights, now), width)),
         Column::Title if pr.is_draft => Cell::from(Line::from(vec![
             "draft ".dark_gray().italic(),
             Span::raw(pr.title.clone()),
@@ -280,8 +332,38 @@ fn cell(column: Column, pr: &Pr, weights: &ScoreWeights, now: Timestamp) -> Cell
         column if column.right_aligned() => {
             Cell::from(Line::from(column.text(pr, weights, now)).right_aligned())
         }
-        column => Cell::from(column.text(pr, weights, now)),
+        column => Cell::from(column_text(column, pr, scope, weights, now)),
     }
+}
+
+/// The cell as plain text; repos lose their owner in an organization's view.
+fn column_text(
+    column: Column,
+    pr: &Pr,
+    scope: Scope,
+    weights: &ScoreWeights,
+    now: Timestamp,
+) -> String {
+    match column {
+        Column::Repo if scope == Scope::Org => pr.repo.name.clone(),
+        _ => column.text(pr, weights, now),
+    }
+}
+
+/// `text` cut to `width` columns, ending in `…` if anything was lost.
+fn clip(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        if (out.clone() + &c.to_string()).width() + 1 > width {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
 }
 
 const FACETS_WIDTH: u16 = 36;
@@ -1106,6 +1188,33 @@ mod tests {
         app.profile = Some("work".into());
         let tabs = draw(&mut app, 100, 16).lines().next().unwrap().to_owned();
         assert!(tabs.starts_with("\" ghpr  work   for-me "), "{tabs}");
+    }
+
+    #[test]
+    fn scope_leaves_out_what_the_prs_share() {
+        let rows = |scope| {
+            let mut settings = settings("repo", false);
+            settings.tabs[0].scope = scope;
+            let mut app =
+                App::new(settings, now()).with_cache(0, vec![pr(1)], "me".into(), now());
+            // Just the table: the detail pane below names the repo anyway.
+            draw(&mut app, 100, 30).lines().take(5).collect::<Vec<_>>().join("\n")
+        };
+        let mixed = rows(Scope::Mixed);
+        assert!(mixed.contains("REPO") && mixed.contains("acme/api"), "{mixed}");
+        let repo = rows(Scope::Repo);
+        assert!(!repo.contains("REPO") && !repo.contains("acme/api"), "{repo}");
+        // A fork's view can show PRs from both repos.
+        let mut settings = settings("repo", false);
+        settings.tabs[0].scope = Scope::Repo;
+        let mut other = pr(2);
+        other.repo = "someone/api".parse().unwrap();
+        let mut app =
+            App::new(settings, now()).with_cache(0, vec![pr(1), other], "me".into(), now());
+        let both = draw(&mut app, 100, 30);
+        assert!(both.contains("REPO") && both.contains("someone/api"), "{both}");
+        let org = rows(Scope::Org);
+        assert!(org.contains("REPO") && !org.contains("acme/"), "{org}");
     }
 
     #[test]

@@ -191,6 +191,7 @@ async fn interactive(global: &GlobalArgs, view: Option<&str>) -> Result<()> {
         };
         let settings = tui::TabSettings {
             view_name: name,
+            scope: view.scope,
             filter,
             sort,
         };

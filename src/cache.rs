@@ -128,6 +128,7 @@ mod tests {
     fn view(name: &str, query: &str) -> View {
         View {
             name: name.to_owned(),
+            scope: Default::default(),
             searches: vec![Search {
                 query: query.to_owned(),
                 keep: Keep::All,

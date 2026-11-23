@@ -17,6 +17,7 @@ use crate::notify::{self, Notice, Notifier};
 use crate::progress::Progress;
 use crate::sort::SortSpec;
 use crate::state::{Flags, LocalState, Snooze, SnoozeMode};
+use crate::views::Scope;
 
 /// How long a transient status message stays visible.
 const FLASH_FOR: SignedDuration = SignedDuration::from_secs(4);
@@ -81,6 +82,7 @@ pub struct NotifySettings {
 
 pub struct TabSettings {
     pub view_name: String,
+    pub scope: Scope,
     /// Must be valid; it's parsed again here.
     pub filter: String,
     pub sort: SortSpec,
@@ -89,6 +91,8 @@ pub struct TabSettings {
 /// One view: its data, and how it's filtered, sorted, and scrolled.
 pub struct Tab {
     pub view_name: String,
+    /// What the view's PRs share; the table leaves that out.
+    pub scope: Scope,
     /// Everything fetched, before filtering.
     all: Vec<Pr>,
     /// What's shown: filtered and sorted.
@@ -122,6 +126,7 @@ impl Tab {
         Tab {
             filter: Filter::parse(&settings.filter).unwrap_or_default(),
             view_name: settings.view_name,
+            scope: settings.scope,
             all: Vec::new(),
             prs: Vec::new(),
             table: TableState::default(),
@@ -1185,6 +1190,7 @@ pub mod tests {
     fn tab_settings(view: &str) -> TabSettings {
         TabSettings {
             view_name: view.into(),
+            scope: Scope::default(),
             filter: String::new(),
             sort: SortSpec::parse("number").unwrap(),
         }
