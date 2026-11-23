@@ -12,7 +12,7 @@ use crate::filter::Mark;
 use crate::model::{
     CiState, MergeState, Mergeable, Pr, QueueState, ReviewDecision, ReviewState, Reviewer, Turn,
 };
-use crate::model::{ScoreWeights, Tone, breakdown, slots};
+use crate::model::{Role, ScoreWeights, Tone, breakdown, slots};
 use crate::output::{age, span};
 use crate::progress::{STALL_SECS, elapsed};
 use crate::state::{Flags, Snooze, SnoozeMode};
@@ -183,7 +183,9 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             tab.prs
                 .iter()
-                .map(|pr| column_text(column, pr, scope, &app.weights, app.now).width())
+                .map(|pr| {
+                    column_text(column, pr, scope, &app.viewer, &app.weights, app.now).width()
+                })
                 .chain([column.header().width()])
                 .max()
                 .unwrap_or(0)
@@ -211,9 +213,17 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|pr| {
             let flags = app.flags(pr);
             let cells = std::iter::once(Cell::from(marker(flags))).chain(with_borders(
-                shown
-                    .iter()
-                    .map(|(column, width)| cell(*column, *width, pr, scope, &app.weights, app.now)),
+                shown.iter().map(|(column, width)| {
+                    cell(
+                        *column,
+                        *width,
+                        pr,
+                        scope,
+                        &app.viewer,
+                        &app.weights,
+                        app.now,
+                    )
+                }),
                 border_cell,
             ));
             let row = Row::new(cells.collect::<Vec<_>>());
@@ -300,6 +310,7 @@ fn cell(
     width: usize,
     pr: &Pr,
     scope: Scope,
+    viewer: &str,
     weights: &ScoreWeights,
     now: Timestamp,
 ) -> Cell<'static> {
@@ -308,7 +319,24 @@ fn cell(
             clip(pr.turn.label(), width),
             turn_style(pr.turn),
         )),
+        // Your own PRs say "me", always in the color of "me" in LAST.
+        Column::Author if is_mine(pr, viewer) => {
+            Cell::from(Span::styled(clip("me", width), turn_style(Turn::Me)))
+        }
         Column::Author => Cell::from(clip(&column.text(pr, weights, now), width)),
+        // Who acted last, in the color of the turn that role would give.
+        Column::Last => match &pr.last_activity {
+            Some(activity) => Cell::from(Span::styled(
+                activity.role.label(),
+                turn_style(match activity.role {
+                    Role::Me => Turn::Me,
+                    Role::Author => Turn::Author,
+                    Role::Reviewer => Turn::Reviewers,
+                    Role::Bot => Turn::Blocked,
+                }),
+            )),
+            None => Cell::from("-"),
+        },
         Column::Title if pr.is_draft => Cell::from(Line::from(vec![
             "draft ".dark_gray().italic(),
             Span::raw(pr.title.clone()),
@@ -332,7 +360,7 @@ fn cell(
         column if column.right_aligned() => {
             Cell::from(Line::from(column.text(pr, weights, now)).right_aligned())
         }
-        column => Cell::from(column_text(column, pr, scope, weights, now)),
+        column => Cell::from(column_text(column, pr, scope, viewer, weights, now)),
     }
 }
 
@@ -341,13 +369,23 @@ fn column_text(
     column: Column,
     pr: &Pr,
     scope: Scope,
+    viewer: &str,
     weights: &ScoreWeights,
     now: Timestamp,
 ) -> String {
     match column {
+        Column::Author if is_mine(pr, viewer) => "me".to_owned(),
         Column::Repo if scope == Scope::Org => pr.repo.name.clone(),
         _ => column.text(pr, weights, now),
     }
+}
+
+fn is_mine(pr: &Pr, viewer: &str) -> bool {
+    !viewer.is_empty()
+        && pr
+            .author
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case(viewer))
 }
 
 /// `text` cut to `width` columns, ending in `…` if anything was lost.
@@ -1191,19 +1229,47 @@ mod tests {
     }
 
     #[test]
+    fn my_own_prs_say_me_in_the_author_column() {
+        let mut mine = pr(1);
+        mine.author = Some("Me".into());
+        let mut app = App::new(settings("for-me", false), now()).with_cache(
+            0,
+            vec![mine, pr(2)],
+            "me".into(),
+            now(),
+        );
+        let table: Vec<String> = draw(&mut app, 120, 30)
+            .lines()
+            .take(5)
+            .map(String::from)
+            .collect();
+        assert!(table[3].contains("│ me "), "{}", table[3]);
+        assert!(table[4].contains("alice"), "{}", table[4]);
+    }
+
+    #[test]
     fn scope_leaves_out_what_the_prs_share() {
         let rows = |scope| {
             let mut settings = settings("repo", false);
             settings.tabs[0].scope = scope;
-            let mut app =
-                App::new(settings, now()).with_cache(0, vec![pr(1)], "me".into(), now());
+            let mut app = App::new(settings, now()).with_cache(0, vec![pr(1)], "me".into(), now());
             // Just the table: the detail pane below names the repo anyway.
-            draw(&mut app, 100, 30).lines().take(5).collect::<Vec<_>>().join("\n")
+            draw(&mut app, 100, 30)
+                .lines()
+                .take(5)
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         let mixed = rows(Scope::Mixed);
-        assert!(mixed.contains("REPO") && mixed.contains("acme/api"), "{mixed}");
+        assert!(
+            mixed.contains("REPO") && mixed.contains("acme/api"),
+            "{mixed}"
+        );
         let repo = rows(Scope::Repo);
-        assert!(!repo.contains("REPO") && !repo.contains("acme/api"), "{repo}");
+        assert!(
+            !repo.contains("REPO") && !repo.contains("acme/api"),
+            "{repo}"
+        );
         // A fork's view can show PRs from both repos.
         let mut settings = settings("repo", false);
         settings.tabs[0].scope = Scope::Repo;
@@ -1212,7 +1278,10 @@ mod tests {
         let mut app =
             App::new(settings, now()).with_cache(0, vec![pr(1), other], "me".into(), now());
         let both = draw(&mut app, 100, 30);
-        assert!(both.contains("REPO") && both.contains("someone/api"), "{both}");
+        assert!(
+            both.contains("REPO") && both.contains("someone/api"),
+            "{both}"
+        );
         let org = rows(Scope::Org);
         assert!(org.contains("REPO") && !org.contains("acme/"), "{org}");
     }
@@ -1220,13 +1289,22 @@ mod tests {
     #[test]
     fn only_the_active_tab_shows_a_spinner_and_the_bell_marks_the_notifier() {
         let mut app = App::new(settings_with(&["for-me", "mine"], false), now());
-        app.update(Msg::Key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE)));
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('B'),
+            KeyModifiers::NONE,
+        )));
         app.update(Msg::NotifyLock(true));
         app.update(Msg::Tick(now())); // for-me is active and starts refreshing
-        app.update(Msg::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)));
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::NONE,
+        )));
         let tabs_line = draw(&mut app, 100, 10).lines().next().unwrap().to_owned();
         assert!(tabs_line.contains("for-me 🔔"), "{tabs_line}");
-        assert!(!tabs_line.contains('⠋') && !tabs_line.contains('⠙'), "{tabs_line}");
+        assert!(
+            !tabs_line.contains('⠋') && !tabs_line.contains('⠙'),
+            "{tabs_line}"
+        );
     }
 
     #[test]

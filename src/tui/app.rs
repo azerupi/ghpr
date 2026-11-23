@@ -277,10 +277,10 @@ pub enum Cmd {
 impl App {
     pub fn new(settings: Settings, now: Timestamp) -> Self {
         let tabs: Vec<Tab> = settings.tabs.into_iter().map(Tab::new).collect();
-        let notify_events = settings.notify.as_ref().map_or_else(
-            || notify::DEFAULT_EVENTS.to_vec(),
-            |n| n.events.clone(),
-        );
+        let notify_events = settings
+            .notify
+            .as_ref()
+            .map_or_else(|| notify::DEFAULT_EVENTS.to_vec(), |n| n.events.clone());
         let notifier = settings.notify.filter(|n| n.tab < tabs.len()).map(|n| {
             let filter = Filter::parse(&n.filter).unwrap_or_default();
             (n.tab, Notifier::new(n.events, filter))
